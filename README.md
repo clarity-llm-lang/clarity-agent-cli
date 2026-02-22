@@ -138,6 +138,62 @@ npm test
 npm run test:coverage
 ```
 
+## CI/CD and GitHub
+
+- PR CI: `.github/workflows/build.yml` (branch naming + build + lint + format + test).
+- Snapshot package on every push to `main`: `.github/workflows/snapshot.yml`.
+- Tagged release pipeline: `.github/workflows/release.yml`.
+- Release automation: `.github/workflows/release-please.yml`.
+- Security checks:
+  - `.github/workflows/dependency-review.yml`
+  - `.github/workflows/codeql.yml`
+  - `.github/workflows/secret-scan.yml`
+- Repo automation:
+  - Dependabot: `.github/dependabot.yml`
+  - CODEOWNERS: `.github/CODEOWNERS`
+  - PR/Issue templates: `.github/pull_request_template.md`, `.github/ISSUE_TEMPLATE/*`
+  - Label sync + path labeling: `.github/workflows/labels-sync.yml`, `.github/workflows/labeler.yml`, `.github/labeler.yml`
+  - Optional project auto-add: `.github/workflows/project-automation.yml` (set `GH_PROJECT_URL` and `ADD_TO_PROJECT_PAT`)
+
+### Required GitHub settings (manual)
+
+- Protect `main`:
+  - Require pull requests before merge
+  - Require status checks to pass before merge
+  - Require branches to be up to date before merge
+  - Require linear history
+- Merge strategy:
+  - Enable squash merge
+  - Disable merge commits
+- Optional hardening:
+  - Restrict who can push to `main`
+  - Require review from Code Owners
+
+## Commit/Release convention
+
+- Use conventional commits so release automation can infer version bumps:
+  - `feat: ...`
+  - `fix: ...`
+  - `chore: ...`
+  - `docs: ...`
+  - `refactor: ...`
+- Use `BREAKING CHANGE:` in commit bodies for major releases.
+
+## Contributing
+
+This repository follows trunk-based development:
+
+1. Keep `main` releasable at all times.
+2. Branch from `main`, keep branches short-lived, and merge quickly.
+3. Name branches by expected outcome:
+   - `result/<outcome-kebab-case>`
+   - `hotfix/<outcome-kebab-case>`
+   - `codex/<outcome-kebab-case>`
+   - (automation exception) `dependabot/*`
+4. Open a PR to `main` with behavior/rationale notes.
+5. Ensure CI is green (`.github/workflows/build.yml`).
+6. Push regularly so remote branch state matches local progress.
+
 ## Notes
 
 - This project is operator I/O only. It does not execute Clarity programs.
