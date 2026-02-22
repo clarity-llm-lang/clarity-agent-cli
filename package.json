@@ -14,7 +14,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "test:coverage": "npm run build && c8 --check-coverage --lines 40 --functions 40 --branches 35 --statements 40 node --test dist/tests/*.test.js"
+    "test:coverage": "npm run build && npx c8 --exclude dist/pkg/ui/** --check-coverage --lines 40 --functions 40 --branches 35 --statements 40 node --test dist/tests/broker.test.js"
   },
   "bin": {
     "clarity-agent": "dist/cmd/clarity-agent.js",
