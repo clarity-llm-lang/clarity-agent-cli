@@ -1,0 +1,35 @@
+ci/cd:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "README.md"
+          - "docs/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "src/tests/**"
+
+cli-core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cmd/**"
+          - "src/pkg/hitl/**"
+          - "src/pkg/tty/**"
+
+hitl-protocol:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/hitl-broker-spec.md"
+          - "src/pkg/http/**"
+          - "src/pkg/hitl/**"
+
+web-ui:
+  - changed-files:
+      - any-glob-to-any-file: "src/pkg/ui/**"
+
+assets:
+  - changed-files:
+      - any-glob-to-any-file: "assets/**"

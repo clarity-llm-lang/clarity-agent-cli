@@ -1,0 +1,27 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Clarity Agent CLI banner">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1f2a"/>
+      <stop offset="100%" stop-color="#135c7a"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7ce0ff"/>
+      <stop offset="100%" stop-color="#b3ffcf"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" fill="url(#bg)" rx="24"/>
+  <g opacity="0.25" stroke="url(#line)" stroke-width="2">
+    <path d="M40 80h1120"/>
+    <path d="M40 140h1120"/>
+    <path d="M40 200h1120"/>
+    <path d="M40 260h1120"/>
+  </g>
+  <g transform="translate(80,82)">
+    <rect x="0" y="0" width="180" height="180" rx="20" fill="#09151c" stroke="#7ce0ff"/>
+    <path d="M46 66l30 24-30 24" fill="none" stroke="#7ce0ff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M96 118h38" fill="none" stroke="#b3ffcf" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <text x="300" y="144" fill="#e9fbff" font-family="Menlo, Consolas, monospace" font-size="56" font-weight="700">Clarity Agent CLI</text>
+  <text x="300" y="198" fill="#bdeeff" font-family="Menlo, Consolas, monospace" font-size="28">HITL broker + remote operator interface</text>
+  <text x="300" y="242" fill="#dff9ff" font-family="Menlo, Consolas, monospace" font-size="20">watch - list - answer - cancel - serve - connect</text>
+</svg>

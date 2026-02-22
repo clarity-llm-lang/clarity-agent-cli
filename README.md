@@ -1,0 +1,144 @@
+<p align="center">
+  <img src="assets/clarity-agent-cli-banner.svg" alt="Clarity Agent CLI" width="860">
+</p>
+
+<p align="center">
+  <strong>Operator-first CLI and broker gateway for HITL workflows in the Clarity ecosystem.</strong>
+</p>
+
+---
+
+`clarity-agent-cli` is a standalone interface for connecting operators to running Clarity agents.
+
+It follows the HITL broker contract defined in `docs/hitl-broker-spec.md` and supports two operation styles:
+
+- local file-handshake mode (`.question` / `.answer` files)
+- remote broker mode over HTTP/SSE (`/questions`, `/answer`, `/cancel`, `/events`)
+
+## Why this exists
+
+Clarity agents can pause for human input (`hitl_ask`) while running on different hosts and runtimes.
+This CLI gives one consistent interface for:
+
+- watching and answering pending HITL questions
+- exposing an HTTP broker API + lightweight web UI
+- connecting to an existing broker and answering remotely
+- maintaining auditable operator activity logs
+
+## Architecture
+
+```text
+Clarity Agent Runtime                 Operator Interface
+---------------------                 ------------------
+hitl_ask(key, question)
+        |
+        | (file mode) write .question
+        v
++----------------------+             +-------------------------+
+| .clarity-hitl dir    |<----------->| clarity-agent watch     |
+| {key}.question       |             | clarity-agent list      |
+| {key}.answer         |             | clarity-agent answer    |
++----------------------+             | clarity-agent cancel    |
+                                     +-------------------------+
+
+        | (http mode)
+        v
++----------------------+             +-------------------------+
+| clarity-agent serve  |<----------->| clarity-agent connect   |
+| /questions           |             | (remote broker client)  |
+| /answer              |             +-------------------------+
+| /cancel              |
+| /events (SSE)        |
++----------------------+
+```
+
+## Install and run
+
+```bash
+npm install
+npm run build
+
+# local file mode
+npx clarity-agent watch
+
+# list pending questions
+npx clarity-agent list
+
+# answer one question
+npx clarity-agent answer review-step-3 "Looks good, proceed"
+
+# host broker API + UI (http://localhost:7842)
+npx clarity-agent serve --port 7842
+
+# connect to a remote broker and operate interactively
+npx clarity-agent connect http://localhost:7842
+```
+
+You can also invoke the same binary as `clarity-hitl` for compatibility.
+
+## CLI commands
+
+```bash
+clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--log <file>] [--poll-ms <ms>]
+clarity-agent list [dir] [--dir <path>]
+clarity-agent answer <key> <response> [--dir <path>]
+clarity-agent cancel <key> [--dir <path>]
+clarity-agent serve [--dir <path>] [--port <port>] [--token <secret>]
+clarity-agent connect <broker-url> [--token <secret>] [--poll-ms <ms>]
+```
+
+## Broker HTTP API
+
+- `GET /questions` -> pending questions
+- `GET /questions/:key` -> question state (`pending|answered|missing`)
+- `POST /questions` -> create question (`{ key, question }`)
+- `POST /answer` -> write answer (`{ key, response }`)
+- `POST /cancel` -> cancel pending question (`{ key }`)
+- `GET /events` -> SSE events (`new_question`, `answered`)
+
+When `--token` is set on `serve`, include either:
+
+- `Authorization: Bearer <token>`
+- `x-clarity-token: <token>`
+
+## Environment variables
+
+- `CLARITY_HITL_DIR` (default `.clarity-hitl/`)
+- `CLARITY_HITL_TIMEOUT_SECS` (default `600`, runtime-side)
+- `CLARITY_HITL_BROKER_URL` (runtime HTTP mode target)
+
+## Project structure
+
+```text
+.
+|-- .github/
+|   |-- workflows/
+|   `-- ISSUE_TEMPLATE/
+|-- assets/
+|-- docs/
+|   `-- hitl-broker-spec.md
+|-- src/
+|   |-- cmd/
+|   |-- pkg/
+|   |   |-- audit/
+|   |   |-- hitl/
+|   |   |-- http/
+|   |   |-- tty/
+|   |   `-- ui/
+|   `-- tests/
+`-- README.md
+```
+
+## Quality gates
+
+```bash
+npm run lint
+npm run format
+npm test
+npm run test:coverage
+```
+
+## Notes
+
+- This project is operator I/O only. It does not execute Clarity programs.
+- For production, put `serve` behind a reverse proxy with real auth.
