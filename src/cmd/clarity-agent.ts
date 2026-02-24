@@ -17,6 +17,7 @@ import {
   listRuntimeAgents,
   listRuntimeRunEvents,
   startRuntimeApiRun,
+  streamRuntimeRunEvents,
   streamRuntimeEvents,
   submitRuntimeHitlInput,
   type RuntimeAgentRegistryItem,
@@ -473,6 +474,7 @@ program
       let streamHealthy = false;
       let streamErrored = false;
       let terminalByStream: string | null = null;
+      let useRunScopedStream = true;
       const streamAbort = new AbortController();
 
       const recordEvent = (event: RuntimeRunEvent): boolean => {
@@ -513,27 +515,54 @@ program
         ? (async (): Promise<void> => {
             while (!streamAbort.signal.aborted) {
               try {
-                await streamRuntimeEvents(runtimeUrl, {
-                  token: opts.token,
-                  signal: streamAbort.signal,
-                  onOpen: () => {
-                    streamHealthy = true;
-                  },
-                  onEvent: async (event) => {
-                    recordEvent(event);
-                  }
-                });
-                break;
+                if (useRunScopedStream) {
+                  await streamRuntimeRunEvents(runtimeUrl, runId, {
+                    token: opts.token,
+                    signal: streamAbort.signal,
+                    limit: eventsLimit,
+                    onOpen: () => {
+                      streamHealthy = true;
+                      streamErrored = false;
+                    },
+                    onEvent: async (event) => {
+                      recordEvent(event);
+                    }
+                  });
+                } else {
+                  await streamRuntimeEvents(runtimeUrl, {
+                    token: opts.token,
+                    signal: streamAbort.signal,
+                    onOpen: () => {
+                      streamHealthy = true;
+                      streamErrored = false;
+                    },
+                    onEvent: async (event) => {
+                      recordEvent(event);
+                    }
+                  });
+                }
+                if (streamAbort.signal.aborted) {
+                  break;
+                }
+                streamHealthy = false;
+                await sleep(pollMs);
               } catch (error) {
                 if (streamAbort.signal.aborted) {
                   break;
                 }
                 streamHealthy = false;
-                streamErrored = true;
                 const message = error instanceof Error ? error.message : String(error);
-                process.stdout.write(
-                  `[${new Date().toISOString()}] stream error: ${message}. Falling back to polling.\n`
-                );
+                if (useRunScopedStream) {
+                  useRunScopedStream = false;
+                  process.stdout.write(
+                    `[${new Date().toISOString()}] run stream unavailable: ${message}. Falling back to global stream.\n`
+                  );
+                } else {
+                  streamErrored = true;
+                  process.stdout.write(
+                    `[${new Date().toISOString()}] stream error: ${message}. Falling back to polling.\n`
+                  );
+                }
                 await sleep(pollMs);
               }
             }

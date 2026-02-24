@@ -43,6 +43,10 @@ export interface RuntimeEventsStreamOptions {
   onEvent: (event: RuntimeRunEvent) => void | Promise<void>;
 }
 
+export interface RuntimeRunEventsStreamOptions extends RuntimeEventsStreamOptions {
+  limit?: number;
+}
+
 export interface RuntimeAgentEventInput {
   kind: string;
   level?: "info" | "warn" | "error";
@@ -329,7 +333,35 @@ export async function streamRuntimeEvents(
   baseUrl: string,
   options: RuntimeEventsStreamOptions
 ): Promise<void> {
-  const response = await fetch(withRoute(baseUrl, "/api/events"), {
+  await consumeSseRoute(baseUrl, "/api/events", options);
+}
+
+export async function streamRuntimeRunEvents(
+  baseUrl: string,
+  runId: string,
+  options: RuntimeRunEventsStreamOptions
+): Promise<void> {
+  const safeRunId = runId.trim();
+  if (!safeRunId) {
+    throw new Error("run id is required");
+  }
+  const safeLimit =
+    Number.isInteger(options.limit) && (options.limit ?? 0) > 0
+      ? Math.min(options.limit ?? 200, 5000)
+      : 200;
+  await consumeSseRoute(
+    baseUrl,
+    `/api/agents/runs/${encodeURIComponent(safeRunId)}/events/stream?limit=${safeLimit}`,
+    options
+  );
+}
+
+async function consumeSseRoute(
+  baseUrl: string,
+  route: string,
+  options: RuntimeEventsStreamOptions
+): Promise<void> {
+  const response = await fetch(withRoute(baseUrl, route), {
     method: "GET",
     headers: {
       accept: "text/event-stream",
@@ -340,7 +372,7 @@ export async function streamRuntimeEvents(
 
   if (!response.ok) {
     const reason = await readResponseError(response);
-    throw new Error(`GET /api/events failed (${response.status}): ${reason}`);
+    throw new Error(`GET ${route} failed (${response.status}): ${reason}`);
   }
 
   const body = response.body;
