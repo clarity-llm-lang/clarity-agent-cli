@@ -3,17 +3,18 @@
 </p>
 
 <p align="center">
-  <strong>Operator-first CLI and broker gateway for HITL workflows in the Clarity ecosystem.</strong>
+  <strong>Operator-first CLI for HITL broker workflows and runtime-agent chat in the Clarity ecosystem.</strong>
 </p>
 
 ---
 
 `clarity-agent-cli` is a standalone interface for connecting operators to running Clarity agents.
 
-It follows the HITL broker contract defined in `docs/hitl-broker-spec.md` and supports two operation styles:
+It follows the HITL broker contract defined in `docs/hitl-broker-spec.md` and supports three operation styles:
 
 - local file-handshake mode (`.question` / `.answer` files)
 - remote broker mode over HTTP/SSE (`/questions`, `/answer`, `/cancel`, `/events`)
+- runtime-agent chat mode over `LLM-runtime` / `Clarity-runtime` APIs (`/api/agents/*`)
 
 ## Why this exists
 
@@ -23,6 +24,7 @@ This CLI gives one consistent interface for:
 - watching and answering pending HITL questions
 - exposing an HTTP broker API + lightweight web UI
 - connecting to an existing broker and answering remotely
+- listing runtime agents and chatting through run event streams
 - maintaining auditable operator activity logs
 
 ## Architecture
@@ -72,6 +74,12 @@ npx clarity-agent serve --port 7842
 
 # connect to a remote broker and operate interactively
 npx clarity-agent connect http://localhost:7842
+
+# list runtime agents
+npx clarity-agent runtime-agents http://localhost:4707
+
+# create a run and chat with one runtime agent service
+npx clarity-agent runtime-chat http://localhost:4707 svc_123456789abc
 ```
 
 You can also invoke the same binary as `clarity-hitl` for compatibility.
@@ -85,7 +93,21 @@ clarity-agent answer <key> <response> [--dir <path>]
 clarity-agent cancel <key> [--dir <path>]
 clarity-agent serve [--dir <path>] [--port <port>] [--token <secret>]
 clarity-agent connect <broker-url> [--token <secret>] [--poll-ms <ms>]
+clarity-agent runtime-agents <runtime-url> [--token <secret>]
+clarity-agent runtime-chat <runtime-url> <service-id> [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
 ```
+
+## Runtime chat flow
+
+1. Discover services with `runtime-agents`.
+2. Start chat with `runtime-chat <runtime-url> <service-id>`.
+3. CLI creates `agent.run_created` and `agent.run_started` events (unless `--run-id` is provided).
+4. Send messages; CLI posts to `POST /api/agents/runs/:runId/hitl`.
+5. CLI streams events via `GET /api/agents/runs/:runId/events/stream` when supported.
+6. If run-scoped stream is unavailable, CLI falls back to `GET /api/events`, then polling.
+7. CLI exits on terminal run status.
+
+Detailed bridge contract: `docs/runtime-agent-chat-spec.md`.
 
 ## Broker HTTP API
 
@@ -116,13 +138,15 @@ When `--token` is set on `serve`, include either:
 |   `-- ISSUE_TEMPLATE/
 |-- assets/
 |-- docs/
-|   `-- hitl-broker-spec.md
+|   |-- hitl-broker-spec.md
+|   `-- runtime-agent-chat-spec.md
 |-- src/
 |   |-- cmd/
 |   |-- pkg/
 |   |   |-- audit/
 |   |   |-- hitl/
 |   |   |-- http/
+|   |   |-- runtime/
 |   |   |-- tty/
 |   |   `-- ui/
 |   `-- tests/
