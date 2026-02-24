@@ -94,7 +94,7 @@ clarity-agent cancel <key> [--dir <path>]
 clarity-agent serve [--dir <path>] [--port <port>] [--token <secret>]
 clarity-agent connect <broker-url> [--token <secret>] [--poll-ms <ms>]
 clarity-agent runtime-agents <runtime-url> [--token <secret>]
-clarity-agent runtime-chat <runtime-url> <service-id> [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>]
+clarity-agent runtime-chat <runtime-url> <service-id> [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
 ```
 
 ## Runtime chat flow
@@ -103,7 +103,8 @@ clarity-agent runtime-chat <runtime-url> <service-id> [--agent <agent-id>] [--ru
 2. Start chat with `runtime-chat <runtime-url> <service-id>`.
 3. CLI creates `agent.run_created` and `agent.run_started` events (unless `--run-id` is provided).
 4. Send messages; CLI posts to `POST /api/agents/runs/:runId/hitl`.
-5. CLI polls and renders run events until terminal status.
+5. CLI streams events via `GET /api/events` and filters by `runId` (polling fallback remains active).
+6. CLI exits on terminal run status.
 
 Detailed bridge contract: `docs/runtime-agent-chat-spec.md`.
 

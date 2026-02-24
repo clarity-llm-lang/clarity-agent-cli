@@ -33,8 +33,10 @@ The CLI integrates with existing runtime endpoints:
   - `agent.run_started`
 - `POST /api/agents/runs/:runId/hitl`  
   Used to send operator chat input.
+- `GET /api/events` (SSE)  
+  Used as primary live event stream; CLI filters incoming `agent.*` events by `data.runId`.
 - `GET /api/agents/runs/:runId/events`  
-  Used to poll and render run timeline messages.
+  Used for initial history and fallback polling when SSE is unavailable.
 - `GET /api/agents/runs`  
   Used to read run status and stop chat when terminal.
 
@@ -56,6 +58,7 @@ If `--run-id` is supplied, bootstrap events are skipped and CLI attaches to that
   - `/refresh`: fetch and render latest run events
   - `/exit` or `/quit`: end session
 - Non-command input is sent as HITL message.
+- Event transport defaults to SSE (`/api/events`), with automatic fallback to poll mode.
 - CLI exits automatically when run status becomes terminal (`completed|failed|cancelled`).
 
 ## Security

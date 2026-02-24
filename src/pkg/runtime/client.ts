@@ -36,6 +36,13 @@ export interface RuntimeRunEvent {
   data: Record<string, unknown>;
 }
 
+export interface RuntimeEventsStreamOptions {
+  token?: string;
+  signal?: AbortSignal;
+  onOpen?: () => void;
+  onEvent: (event: RuntimeRunEvent) => void | Promise<void>;
+}
+
 export interface RuntimeAgentEventInput {
   kind: string;
   level?: "info" | "warn" | "error";
@@ -182,6 +189,24 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+function parseRuntimeRunEvent(input: unknown): RuntimeRunEvent | null {
+  const row = asRecord(input);
+  const kind = asString(row.kind);
+  if (!kind) {
+    return null;
+  }
+  const seq = typeof row.seq === "number" && Number.isFinite(row.seq) ? row.seq : undefined;
+  return {
+    ...(typeof seq === "number" ? { seq } : {}),
+    at: asString(row.at) ?? new Date(0).toISOString(),
+    kind,
+    level: asString(row.level) ?? "info",
+    message: asString(row.message) ?? kind,
+    ...(asString(row.serviceId) ? { serviceId: asString(row.serviceId) } : {}),
+    data: asRecord(row.data)
+  };
+}
+
 export async function listRuntimeAgents(
   baseUrl: string,
   token?: string
@@ -293,27 +318,109 @@ export async function listRuntimeRunEvents(
   );
   const root = asRecord(payload);
   const rawItems = Array.isArray(root.items) ? root.items : [];
-  const items: RuntimeRunEvent[] = [];
-
-  for (const rawItem of rawItems) {
-    const row = asRecord(rawItem);
-    const kind = asString(row.kind);
-    if (!kind) {
-      continue;
-    }
-    const seq = typeof row.seq === "number" && Number.isFinite(row.seq) ? row.seq : undefined;
-    items.push({
-      ...(typeof seq === "number" ? { seq } : {}),
-      at: asString(row.at) ?? new Date(0).toISOString(),
-      kind,
-      level: asString(row.level) ?? "info",
-      message: asString(row.message) ?? kind,
-      ...(asString(row.serviceId) ? { serviceId: asString(row.serviceId) } : {}),
-      data: asRecord(row.data)
-    });
-  }
+  const items = rawItems
+    .map((rawItem) => parseRuntimeRunEvent(rawItem))
+    .filter((item): item is RuntimeRunEvent => item !== null);
 
   return items;
+}
+
+export async function streamRuntimeEvents(
+  baseUrl: string,
+  options: RuntimeEventsStreamOptions
+): Promise<void> {
+  const response = await fetch(withRoute(baseUrl, "/api/events"), {
+    method: "GET",
+    headers: {
+      accept: "text/event-stream",
+      ...authHeaders(options.token)
+    },
+    signal: options.signal
+  });
+
+  if (!response.ok) {
+    const reason = await readResponseError(response);
+    throw new Error(`GET /api/events failed (${response.status}): ${reason}`);
+  }
+
+  const body = response.body;
+  if (!body) {
+    throw new Error("stream response body is unavailable");
+  }
+
+  options.onOpen?.();
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let dataLines: string[] = [];
+
+  const flushEvent = async (): Promise<void> => {
+    if (dataLines.length === 0) {
+      return;
+    }
+    const payload = dataLines.join("\n");
+    dataLines = [];
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+      const event = parseRuntimeRunEvent(parsed);
+      if (event) {
+        await options.onEvent(event);
+      }
+    } catch {
+      // Ignore malformed events and continue stream processing.
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex < 0) {
+          break;
+        }
+        const line = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+        buffer = buffer.slice(newlineIndex + 1);
+
+        if (line.length === 0) {
+          await flushEvent();
+          continue;
+        }
+        if (line.startsWith(":")) {
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.length > 0) {
+      const tail = buffer.replace(/\r$/, "");
+      if (tail.startsWith("data:")) {
+        dataLines.push(tail.slice(5).trimStart());
+      }
+    }
+    await flushEvent();
+  } catch (error) {
+    if (
+      options.signal?.aborted &&
+      error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError"
+    ) {
+      return;
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function postRuntimeAgentEvent(

@@ -17,6 +17,7 @@ import {
   listRuntimeAgents,
   listRuntimeRunEvents,
   startRuntimeApiRun,
+  streamRuntimeEvents,
   submitRuntimeHitlInput,
   type RuntimeAgentRegistryItem,
   type RuntimeRunEvent
@@ -197,6 +198,16 @@ function renderRuntimeEvent(event: RuntimeRunEvent, defaultAgent: string): strin
     return `[${stamp}] you: ${compactMessage}`;
   }
   return `[${stamp}] ${eventAgent} (${event.kind}): ${compactMessage}`;
+}
+
+function runIdFromEventData(event: RuntimeRunEvent): string | null {
+  return asNonEmptyDataString(event.data, "runId", "run_id");
+}
+
+function isTerminalRunEventKind(kind: string): boolean {
+  return (
+    kind === "agent.run_completed" || kind === "agent.run_failed" || kind === "agent.run_cancelled"
+  );
 }
 
 const program = new Command();
@@ -397,6 +408,7 @@ program
     (value) => Number.parseInt(value, 10),
     200
   )
+  .option("--no-stream", "Disable SSE streaming and use polling only")
   .action(
     async (
       runtimeUrl: string,
@@ -407,6 +419,7 @@ program
         runId?: string;
         pollMs?: number;
         eventsLimit?: number;
+        stream?: boolean;
       }
     ) => {
       const pollMs = Math.max(300, opts.pollMs ?? 1200);
@@ -414,6 +427,7 @@ program
         Number.isInteger(opts.eventsLimit) && (opts.eventsLimit ?? 0) > 0
           ? Math.min(opts.eventsLimit ?? 200, 5000)
           : 200;
+      const useStream = opts.stream !== false;
 
       const registry = await listRuntimeAgents(runtimeUrl, opts.token);
       const selected = registry.find((item) => item.serviceId === serviceId);
@@ -456,18 +470,34 @@ program
       process.stdout.write("Commands: /status, /refresh, /exit\n");
 
       const seen = new Set<string>();
+      let streamHealthy = false;
+      let streamErrored = false;
+      let terminalByStream: string | null = null;
+      const streamAbort = new AbortController();
+
+      const recordEvent = (event: RuntimeRunEvent): boolean => {
+        if (runIdFromEventData(event) !== runId) {
+          return false;
+        }
+        const marker = eventMarker(event);
+        if (seen.has(marker)) {
+          return false;
+        }
+        seen.add(marker);
+        process.stdout.write(`${renderRuntimeEvent(event, agent)}\n`);
+        if (isTerminalRunEventKind(event.kind)) {
+          terminalByStream = event.kind;
+        }
+        return true;
+      };
 
       const flushEvents = async (): Promise<number> => {
         const events = await listRuntimeRunEvents(runtimeUrl, runId, opts.token, eventsLimit);
         let emitted = 0;
         for (const event of events) {
-          const marker = eventMarker(event);
-          if (seen.has(marker)) {
-            continue;
+          if (recordEvent(event)) {
+            emitted += 1;
           }
-          seen.add(marker);
-          process.stdout.write(`${renderRuntimeEvent(event, agent)}\n`);
-          emitted += 1;
         }
         return emitted;
       };
@@ -479,60 +509,110 @@ program
 
       await flushEvents();
 
-      while (true) {
-        const status = await readStatus();
-        if (status && isTerminalRunStatus(status)) {
-          process.stdout.write(`Run ${runId} is terminal (${status}). Exiting chat.\n`);
-          await flushEvents();
-          break;
-        }
+      const streamTask = useStream
+        ? (async (): Promise<void> => {
+            while (!streamAbort.signal.aborted) {
+              try {
+                await streamRuntimeEvents(runtimeUrl, {
+                  token: opts.token,
+                  signal: streamAbort.signal,
+                  onOpen: () => {
+                    streamHealthy = true;
+                  },
+                  onEvent: async (event) => {
+                    recordEvent(event);
+                  }
+                });
+                break;
+              } catch (error) {
+                if (streamAbort.signal.aborted) {
+                  break;
+                }
+                streamHealthy = false;
+                streamErrored = true;
+                const message = error instanceof Error ? error.message : String(error);
+                process.stdout.write(
+                  `[${new Date().toISOString()}] stream error: ${message}. Falling back to polling.\n`
+                );
+                await sleep(pollMs);
+              }
+            }
+          })()
+        : null;
 
-        const input = (await promptLine("you> ")).trim();
-        if (!input) {
-          await flushEvents();
-          continue;
-        }
-        if (input === "/exit" || input === "/quit") {
-          process.stdout.write("Closing runtime chat.\n");
-          break;
-        }
-        if (input === "/refresh") {
-          await flushEvents();
-          continue;
-        }
-        if (input === "/status") {
-          const current = await readStatus();
-          process.stdout.write(`Run status: ${current ?? "unknown"}\n`);
-          continue;
-        }
-
-        await submitRuntimeHitlInput(
-          runtimeUrl,
-          {
-            runId,
-            message: input,
-            serviceId,
-            agent
-          },
-          opts.token
-        );
-
-        let hadNewEvents = false;
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          if (attempt > 0) {
-            await sleep(pollMs);
-          }
-          const emitted = await flushEvents();
-          if (emitted > 0) {
-            hadNewEvents = true;
-          }
-          const currentStatus = await readStatus();
-          if (currentStatus && isTerminalRunStatus(currentStatus)) {
+      try {
+        while (true) {
+          if (terminalByStream) {
+            process.stdout.write(`Run ${runId} finished (${terminalByStream}). Exiting chat.\n`);
+            await flushEvents();
             break;
           }
-          if (hadNewEvents && emitted === 0) {
+
+          const status = await readStatus();
+          if (status && isTerminalRunStatus(status)) {
+            process.stdout.write(`Run ${runId} is terminal (${status}). Exiting chat.\n`);
+            await flushEvents();
             break;
           }
+
+          const input = (await promptLine("you> ")).trim();
+          if (!input) {
+            if (!useStream || streamErrored || !streamHealthy) {
+              await flushEvents();
+            }
+            continue;
+          }
+          if (input === "/exit" || input === "/quit") {
+            process.stdout.write("Closing runtime chat.\n");
+            break;
+          }
+          if (input === "/refresh") {
+            await flushEvents();
+            continue;
+          }
+          if (input === "/status") {
+            const current = await readStatus();
+            process.stdout.write(`Run status: ${current ?? "unknown"}\n`);
+            continue;
+          }
+
+          await submitRuntimeHitlInput(
+            runtimeUrl,
+            {
+              runId,
+              message: input,
+              serviceId,
+              agent
+            },
+            opts.token
+          );
+
+          if (!useStream || streamErrored || !streamHealthy) {
+            let hadNewEvents = false;
+            for (let attempt = 0; attempt < 6; attempt += 1) {
+              if (attempt > 0) {
+                await sleep(pollMs);
+              }
+              const emitted = await flushEvents();
+              if (emitted > 0) {
+                hadNewEvents = true;
+              }
+              const currentStatus = await readStatus();
+              if (currentStatus && isTerminalRunStatus(currentStatus)) {
+                break;
+              }
+              if (hadNewEvents && emitted === 0) {
+                break;
+              }
+            }
+          } else {
+            await sleep(Math.min(900, pollMs));
+          }
+        }
+      } finally {
+        streamAbort.abort();
+        if (streamTask) {
+          await streamTask;
         }
       }
     }

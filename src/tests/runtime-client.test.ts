@@ -6,6 +6,7 @@ import {
   listRuntimeAgents,
   listRuntimeRunEvents,
   startRuntimeApiRun,
+  streamRuntimeEvents,
   submitRuntimeHitlInput
 } from "../pkg/runtime/client.js";
 
@@ -55,6 +56,78 @@ async function startMockRuntimeServer(
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("failed to bind mock runtime server");
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
+  };
+}
+
+async function startMockSseServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = http.createServer((req, res) => {
+    const method = req.method ?? "GET";
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (method !== "GET" || url.pathname !== "/api/events") {
+      res.statusCode = 404;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(`${JSON.stringify({ error: "not found" })}\n`);
+      return;
+    }
+
+    res.statusCode = 200;
+    res.setHeader("content-type", "text/event-stream; charset=utf-8");
+    res.setHeader("cache-control", "no-cache");
+    res.setHeader("connection", "keep-alive");
+    res.flushHeaders?.();
+
+    res.write(
+      `data: ${JSON.stringify({
+        seq: 11,
+        at: "2026-02-24T10:00:00.000Z",
+        kind: "agent.waiting",
+        level: "info",
+        message: "Awaiting input",
+        data: { runId: "run_stream_1", reason: "Need approval" }
+      })}\n\n`
+    );
+
+    const timer = setTimeout(() => {
+      res.write(
+        `data: ${JSON.stringify({
+          seq: 12,
+          at: "2026-02-24T10:00:02.000Z",
+          kind: "agent.run_completed",
+          level: "info",
+          message: "Run completed",
+          data: { runId: "run_stream_1" }
+        })}\n\n`
+      );
+      res.end();
+    }, 20);
+
+    req.on("close", () => {
+      clearTimeout(timer);
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to bind mock SSE server");
   }
 
   return {
@@ -247,6 +320,28 @@ test("getRuntimeRun and listRuntimeRunEvents parse run data", async () => {
     assert.equal(events[0].seq, 7);
     assert.equal(events[0].kind, "agent.waiting");
     assert.equal(events[0].data.reason, "Need approval");
+  } finally {
+    await close();
+  }
+});
+
+test("streamRuntimeEvents parses SSE payloads", async () => {
+  const { baseUrl, close } = await startMockSseServer();
+
+  try {
+    const received: Array<{ kind: string; runId: string | undefined }> = [];
+    await streamRuntimeEvents(baseUrl, {
+      onEvent: async (event) => {
+        const runId = typeof event.data.runId === "string" ? event.data.runId : undefined;
+        received.push({ kind: event.kind, runId });
+      }
+    });
+
+    assert.equal(received.length, 2);
+    assert.equal(received[0].kind, "agent.waiting");
+    assert.equal(received[0].runId, "run_stream_1");
+    assert.equal(received[1].kind, "agent.run_completed");
+    assert.equal(received[1].runId, "run_stream_1");
   } finally {
     await close();
   }
