@@ -211,6 +211,10 @@ function isTerminalRunEventKind(kind: string): boolean {
   );
 }
 
+function isOperatorInputEventKind(kind: string): boolean {
+  return kind === "agent.hitl_input" || kind === "agent.human_message";
+}
+
 const program = new Command();
 
 program
@@ -476,6 +480,7 @@ program
       let terminalByStream: string | null = null;
       let useRunScopedStream = true;
       const streamAbort = new AbortController();
+      let nonInputEventCount = 0;
 
       const recordEvent = (event: RuntimeRunEvent): boolean => {
         if (runIdFromEventData(event) !== runId) {
@@ -487,6 +492,9 @@ program
         }
         seen.add(marker);
         process.stdout.write(`${renderRuntimeEvent(event, agent)}\n`);
+        if (!isOperatorInputEventKind(event.kind)) {
+          nonInputEventCount += 1;
+        }
         if (isTerminalRunEventKind(event.kind)) {
           terminalByStream = event.kind;
         }
@@ -605,6 +613,7 @@ program
             continue;
           }
 
+          const nonInputCountBeforeSend = nonInputEventCount;
           await submitRuntimeHitlInput(
             runtimeUrl,
             {
@@ -636,6 +645,12 @@ program
             }
           } else {
             await sleep(Math.min(900, pollMs));
+          }
+
+          if (nonInputEventCount === nonInputCountBeforeSend) {
+            process.stdout.write(
+              `[${new Date().toISOString()}] no agent response events yet for ${runId}. Input was accepted, but this runtime is only recording HITL input. Ensure an active agent process loop is consuming run events and emitting follow-up agent.* events.\n`
+            );
           }
         }
       } finally {
