@@ -19,7 +19,7 @@ import {
   startRuntimeApiRun,
   streamRuntimeRunEvents,
   streamRuntimeEvents,
-  submitRuntimeHitlInput,
+  submitRuntimeChatMessage,
   type RuntimeAgentRegistryItem,
   type RuntimeRunEvent
 } from "../pkg/runtime/client.js";
@@ -195,8 +195,18 @@ function renderRuntimeEvent(event: RuntimeRunEvent, defaultAgent: string): strin
   const compactMessage = message.replace(/\s+/g, " ").trim();
   const eventAgent = asNonEmptyDataString(data, "agent", "agentId", "agent_id") ?? defaultAgent;
   const stamp = shortTimeLabel(event.at);
-  if (event.kind === "agent.hitl_input" || event.kind === "agent.human_message") {
+  if (
+    event.kind === "agent.hitl_input"
+    || event.kind === "agent.human_message"
+    || event.kind === "agent.chat.user_message"
+  ) {
     return `[${stamp}] you: ${compactMessage}`;
+  }
+  if (event.kind === "agent.chat.assistant_message") {
+    return `[${stamp}] ${eventAgent}: ${compactMessage}`;
+  }
+  if (event.kind === "agent.chat.system_message") {
+    return `[${stamp}] system: ${compactMessage}`;
   }
   return `[${stamp}] ${eventAgent} (${event.kind}): ${compactMessage}`;
 }
@@ -212,7 +222,11 @@ function isTerminalRunEventKind(kind: string): boolean {
 }
 
 function isOperatorInputEventKind(kind: string): boolean {
-  return kind === "agent.hitl_input" || kind === "agent.human_message";
+  return (
+    kind === "agent.hitl_input"
+    || kind === "agent.human_message"
+    || kind === "agent.chat.user_message"
+  );
 }
 
 const program = new Command();
@@ -614,13 +628,14 @@ program
           }
 
           const nonInputCountBeforeSend = nonInputEventCount;
-          await submitRuntimeHitlInput(
+          await submitRuntimeChatMessage(
             runtimeUrl,
             {
               runId,
               message: input,
               serviceId,
-              agent
+              agent,
+              role: "user"
             },
             opts.token
           );

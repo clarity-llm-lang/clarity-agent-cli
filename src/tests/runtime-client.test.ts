@@ -8,6 +8,7 @@ import {
   startRuntimeApiRun,
   streamRuntimeRunEvents,
   streamRuntimeEvents,
+  submitRuntimeChatMessage,
   submitRuntimeHitlInput
 } from "../pkg/runtime/client.js";
 
@@ -341,6 +342,49 @@ test("submitRuntimeHitlInput posts to run-specific endpoint", async () => {
     assert.equal(body.message, "Hello agent");
     assert.equal(body.service_id, "svc_abc");
     assert.equal(body.agent, "coordinator");
+  } finally {
+    await close();
+  }
+});
+
+test("submitRuntimeChatMessage posts to run messages endpoint", async () => {
+  const captured: CapturedRequest[] = [];
+  const { baseUrl, close } = await startMockRuntimeServer((req) => {
+    captured.push(req);
+    if (req.method === "POST" && req.path === "/api/agents/runs/run_cli_002/messages") {
+      return {
+        body: {
+          ok: true,
+          runId: "run_cli_002",
+          role: "user",
+          kind: "agent.chat.user_message",
+          runtime_chat_execution_queued: true
+        }
+      };
+    }
+    return { status: 404, body: { error: "not found" } };
+  });
+
+  try {
+    const out = await submitRuntimeChatMessage(baseUrl, {
+      runId: "run_cli_002",
+      message: "Hello chat",
+      serviceId: "svc_xyz",
+      agent: "openai-chat-agent",
+      role: "user"
+    });
+    assert.equal(out.ok, true);
+    assert.equal(out.runId, "run_cli_002");
+    assert.equal(out.role, "user");
+    assert.equal(out.runtime_chat_execution_queued, true);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].method, "POST");
+    assert.equal(captured[0].path, "/api/agents/runs/run_cli_002/messages");
+    const body = captured[0].body as Record<string, unknown>;
+    assert.equal(body.message, "Hello chat");
+    assert.equal(body.role, "user");
+    assert.equal(body.service_id, "svc_xyz");
+    assert.equal(body.agent, "openai-chat-agent");
   } finally {
     await close();
   }

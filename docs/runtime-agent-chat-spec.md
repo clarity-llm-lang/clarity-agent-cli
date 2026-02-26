@@ -31,8 +31,8 @@ The CLI integrates with existing runtime endpoints:
   Used by `runtime-chat` to create/start a run when `--run-id` is not provided:
   - `agent.run_created` with `trigger=api`
   - `agent.run_started`
-- `POST /api/agents/runs/:runId/hitl`  
-  Used to send operator chat input.
+- `POST /api/agents/runs/:runId/messages`  
+  Used to send operator chat input (`role=user`).
 - `GET /api/agents/runs/:runId/events/stream` (SSE)  
   Preferred live stream when runtime supports run-scoped event streaming.
 - `GET /api/events` (SSE)  
