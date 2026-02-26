@@ -196,9 +196,9 @@ function renderRuntimeEvent(event: RuntimeRunEvent, defaultAgent: string): strin
   const eventAgent = asNonEmptyDataString(data, "agent", "agentId", "agent_id") ?? defaultAgent;
   const stamp = shortTimeLabel(event.at);
   if (
-    event.kind === "agent.hitl_input"
-    || event.kind === "agent.human_message"
-    || event.kind === "agent.chat.user_message"
+    event.kind === "agent.hitl_input" ||
+    event.kind === "agent.human_message" ||
+    event.kind === "agent.chat.user_message"
   ) {
     return `[${stamp}] you: ${compactMessage}`;
   }
@@ -223,9 +223,9 @@ function isTerminalRunEventKind(kind: string): boolean {
 
 function isOperatorInputEventKind(kind: string): boolean {
   return (
-    kind === "agent.hitl_input"
-    || kind === "agent.human_message"
-    || kind === "agent.chat.user_message"
+    kind === "agent.hitl_input" ||
+    kind === "agent.human_message" ||
+    kind === "agent.chat.user_message"
   );
 }
 
