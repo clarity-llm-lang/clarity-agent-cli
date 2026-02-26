@@ -86,6 +86,26 @@ export interface RuntimeHitlResponse {
   message_redacted?: boolean;
 }
 
+export interface RuntimeChatMessageInput {
+  runId: string;
+  message: string;
+  serviceId?: string;
+  agent?: string;
+  role?: "user" | "assistant" | "system";
+}
+
+export interface RuntimeChatMessageResponse {
+  ok?: boolean;
+  runId?: string;
+  role?: string;
+  kind?: string;
+  serviceId?: string;
+  agent?: string;
+  runtime_chat_execution_queued?: boolean;
+  message_truncated?: boolean;
+  message_redacted?: boolean;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST";
   token?: string;
@@ -573,6 +593,36 @@ export async function submitRuntimeHitlInput(
         ...(input.serviceId ? { service_id: input.serviceId } : {}),
         ...(input.agent ? { agent: input.agent } : {}),
         ...(input.kind ? { kind: input.kind } : {})
+      }
+    }
+  );
+}
+
+export async function submitRuntimeChatMessage(
+  baseUrl: string,
+  input: RuntimeChatMessageInput,
+  token?: string
+): Promise<RuntimeChatMessageResponse> {
+  const runId = input.runId.trim();
+  if (!runId) {
+    throw new Error("run id is required");
+  }
+  const message = input.message.trim();
+  if (!message) {
+    throw new Error("message is required");
+  }
+  const role = asString(input.role) ?? "user";
+  return await requestJson<RuntimeChatMessageResponse>(
+    baseUrl,
+    `/api/agents/runs/${encodeURIComponent(runId)}/messages`,
+    {
+      method: "POST",
+      token,
+      body: {
+        message,
+        role,
+        ...(input.serviceId ? { service_id: input.serviceId } : {}),
+        ...(input.agent ? { agent: input.agent } : {})
       }
     }
   );

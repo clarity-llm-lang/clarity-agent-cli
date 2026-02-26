@@ -102,7 +102,7 @@ clarity-agent runtime-chat <runtime-url> <service-id> [--agent <agent-id>] [--ru
 1. Discover services with `runtime-agents`.
 2. Start chat with `runtime-chat <runtime-url> <service-id>`.
 3. CLI creates `agent.run_created` and `agent.run_started` events (unless `--run-id` is provided).
-4. Send messages; CLI posts to `POST /api/agents/runs/:runId/hitl`.
+4. Send messages; CLI posts to `POST /api/agents/runs/:runId/messages` with `role=user`.
 5. CLI streams events via `GET /api/agents/runs/:runId/events/stream` when supported.
 6. If run-scoped stream is unavailable, CLI falls back to `GET /api/events`, then polling.
 7. CLI exits on terminal run status.
