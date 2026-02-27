@@ -9,7 +9,9 @@ This repository packages the operator-side HITL interface as a standalone CLI + 
 - `src/pkg/hitl/watch.ts`: operator watch loop
 - `src/pkg/http/server.ts`: broker HTTP API + SSE + embedded UI
 - `src/pkg/http/client.ts`: remote broker client used by `connect`
-- `src/pkg/runtime/client.ts`: runtime API client used by `runtime-agents` and `runtime-chat`
+- `src/pkg/runtime/client.ts`: runtime API client used by `runtime-agents` and TypeScript fallback runtime-chat bridge
+- `src/pkg/runtime/clarity-runtime-chat.ts`: launcher for native Clarity runtime-chat implementation
+- `clarity/runtime-chat/main.clarity`: native runtime-chat program (default engine)
 - `src/pkg/audit/log.ts`: append-only JSONL audit sink
 
 ## Runtime placement

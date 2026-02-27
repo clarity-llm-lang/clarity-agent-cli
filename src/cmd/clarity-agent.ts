@@ -23,6 +23,7 @@ import {
   type RuntimeAgentRegistryItem,
   type RuntimeRunEvent
 } from "../pkg/runtime/client.js";
+import { runRuntimeChatViaClarity } from "../pkg/runtime/clarity-runtime-chat.js";
 import { promptLine } from "../pkg/tty/prompt.js";
 
 interface SharedDirOptions {
@@ -158,6 +159,52 @@ function printRuntimeAgents(items: RuntimeAgentRegistryItem[]): void {
     process.stdout.write(
       `${row.serviceId.padEnd(serviceIdWidth)}  ${row.agentId.padEnd(agentIdWidth)}  ${row.name.padEnd(nameWidth)}  ${row.triggers.padEnd(triggerWidth)}  ${row.lifecycle.padEnd(lifecycleWidth)}  ${row.health.padEnd(healthWidth)}\n`
     );
+  }
+}
+
+function runtimeAgentLabel(item: RuntimeAgentRegistryItem): string {
+  const name = item.agent.name || item.displayName || item.serviceId;
+  const agentId = item.agent.agentId || "-";
+  const triggers = item.agent.triggers.length > 0 ? item.agent.triggers.join(",") : "-";
+  return `${name} (${agentId}) service=${item.serviceId} triggers=${triggers} lifecycle=${item.lifecycle} health=${item.health}`;
+}
+
+async function selectRuntimeAgentInteractive(
+  runtimeUrl: string,
+  registry: RuntimeAgentRegistryItem[]
+): Promise<RuntimeAgentRegistryItem> {
+  if (registry.length === 0) {
+    throw new Error(`no agent services are registered on runtime: ${runtimeUrl}`);
+  }
+
+  process.stdout.write(`Connected to runtime: ${runtimeUrl}\n`);
+  process.stdout.write("Select an agent:\n");
+  for (let idx = 0; idx < registry.length; idx += 1) {
+    process.stdout.write(`  ${String(idx + 1).padStart(2, " ")}. ${runtimeAgentLabel(registry[idx])}\n`);
+  }
+
+  while (true) {
+    const answer = (await promptLine(`agent number [1-${registry.length}]> `)).trim();
+    const index = Number.parseInt(answer, 10);
+    if (Number.isInteger(index) && index >= 1 && index <= registry.length) {
+      return registry[index - 1];
+    }
+    process.stdout.write(`Invalid selection '${answer || "(empty)"}'. Enter 1-${registry.length}.\n`);
+  }
+}
+
+async function resolveRuntimeUrl(input: string | undefined): Promise<string> {
+  const candidate = input?.trim();
+  if (candidate && candidate.length > 0) {
+    return candidate;
+  }
+
+  while (true) {
+    const answer = (await promptLine("runtime url> ")).trim();
+    if (answer.length > 0) {
+      return answer;
+    }
+    process.stdout.write("Runtime URL is required.\n");
   }
 }
 
@@ -414,9 +461,9 @@ program
 
 program
   .command("runtime-chat")
-  .description("Connect to a runtime agent run and chat over HITL input")
-  .argument("<runtimeUrl>", "Runtime base URL")
-  .argument("<serviceId>", "Agent service id from runtime-agents")
+  .description("Connect to runtime, select an agent, and chat in one flow")
+  .argument("[runtimeUrl]", "Runtime base URL (prompted when omitted)")
+  .argument("[serviceId]", "Agent service id (optional; prompts with numbered selection when omitted)")
   .option("--agent <agentId>", "Override agent id (defaults to registry value)")
   .option("--run-id <runId>", "Attach to an existing run instead of creating one")
   .option("--token <secret>", "Optional bearer token")
@@ -428,10 +475,11 @@ program
     200
   )
   .option("--no-stream", "Disable SSE streaming and use polling only")
+  .option("--bridge <engine>", "Runtime chat engine: clarity (default) or ts", "clarity")
   .action(
     async (
-      runtimeUrl: string,
-      serviceId: string,
+      runtimeUrlArg: string | undefined,
+      serviceIdArg: string | undefined,
       opts: {
         token?: string;
         agent?: string;
@@ -439,8 +487,29 @@ program
         pollMs?: number;
         eventsLimit?: number;
         stream?: boolean;
+        bridge?: string;
       }
     ) => {
+      const bridge = (opts.bridge ?? "clarity").trim().toLowerCase();
+      if (bridge !== "clarity" && bridge !== "ts") {
+        throw new Error(`invalid --bridge value: ${opts.bridge}. Use 'clarity' or 'ts'.`);
+      }
+
+      if (bridge === "clarity") {
+        await runRuntimeChatViaClarity({
+          runtimeUrlArg,
+          serviceIdArg,
+          token: opts.token,
+          pollMs: opts.pollMs,
+          eventsLimit: opts.eventsLimit,
+          stream: opts.stream,
+          runId: opts.runId,
+          agent: opts.agent
+        });
+        return;
+      }
+
+      const runtimeUrl = await resolveRuntimeUrl(runtimeUrlArg);
       const pollMs = Math.max(300, opts.pollMs ?? 1200);
       const eventsLimit =
         Number.isInteger(opts.eventsLimit) && (opts.eventsLimit ?? 0) > 0
@@ -449,15 +518,26 @@ program
       const useStream = opts.stream !== false;
 
       const registry = await listRuntimeAgents(runtimeUrl, opts.token);
-      const selected = registry.find((item) => item.serviceId === serviceId);
-      if (!selected) {
-        const known = registry.map((item) => item.serviceId).join(", ");
-        throw new Error(
-          known.length > 0
-            ? `service not found in runtime registry: ${serviceId}. Known: ${known}`
-            : `service not found in runtime registry: ${serviceId}`
-        );
+      let selected: RuntimeAgentRegistryItem;
+      const serviceId = serviceIdArg?.trim();
+      if (serviceId && serviceId.length > 0) {
+        const resolvedByNumber =
+          /^\d+$/.test(serviceId) && Number.parseInt(serviceId, 10) >= 1 && Number.parseInt(serviceId, 10) <= registry.length
+            ? registry[Number.parseInt(serviceId, 10) - 1]
+            : null;
+        selected =
+          resolvedByNumber ?? registry.find((item) => item.serviceId === serviceId) ?? (() => {
+            const known = registry.map((item) => item.serviceId).join(", ");
+            throw new Error(
+              known.length > 0
+                ? `service not found in runtime registry: ${serviceId}. Known: ${known}`
+                : `service not found in runtime registry: ${serviceId}`
+            );
+          })();
+      } else {
+        selected = await selectRuntimeAgentInteractive(runtimeUrl, registry);
       }
+      const selectedServiceId = selected.serviceId;
 
       const agent =
         opts.agent?.trim() || selected.agent.agentId || selected.agent.name || "unknown-agent";
@@ -468,7 +548,7 @@ program
         await startRuntimeApiRun(
           runtimeUrl,
           {
-            serviceId,
+            serviceId: selectedServiceId,
             runId,
             agent,
             route: "/cli/runtime-chat",
@@ -484,7 +564,7 @@ program
       }
 
       process.stdout.write(`Runtime: ${runtimeUrl}\n`);
-      process.stdout.write(`Service: ${serviceId}\n`);
+      process.stdout.write(`Service: ${selectedServiceId}\n`);
       process.stdout.write(`Agent: ${agent}\n`);
       process.stdout.write("Commands: /status, /refresh, /exit\n");
 
@@ -633,7 +713,7 @@ program
             {
               runId,
               message: input,
-              serviceId,
+              serviceId: selectedServiceId,
               agent,
               role: "user"
             },

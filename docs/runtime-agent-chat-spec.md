@@ -1,6 +1,6 @@
 # Runtime Agent Chat CLI Spec
 
-Status: Draft (implemented in TypeScript bridge mode)  
+Status: Active (implemented in native Clarity mode, TypeScript bridge fallback available)  
 Owner: `LLM-cli`
 
 ## Goal
@@ -16,14 +16,20 @@ Provide a CLI operator flow to:
 
 This spec adds runtime chat capabilities to `clarity-agent` without changing the existing HITL broker commands.
 
-New commands:
+Commands:
 
 - `clarity-agent runtime-agents <runtimeUrl> [--token]`
-- `clarity-agent runtime-chat <runtimeUrl> <serviceId> [--agent <agentId>] [--run-id <runId>] [--token] [--poll-ms <ms>] [--events-limit <n>]`
+- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--token] [--poll-ms <ms>] [--events-limit <n>] [--bridge <clarity|ts>]`
 
-## Runtime API Contract (Current Bridge)
+Single-start UX for `runtime-chat`:
 
-The CLI integrates with existing runtime endpoints:
+1. Connect to runtime (use provided `runtimeUrl` or prompt for URL).
+2. Fetch and display agent services as numbered options.
+3. Select one number to connect and start chat.
+
+## Runtime API Contract (Clarity Default Engine)
+
+The default `runtime-chat` engine (Clarity) integrates with existing runtime endpoints:
 
 - `GET /api/agents/registry`  
   Used by `runtime-agents` and for service/agent lookup before chat.
@@ -33,14 +39,8 @@ The CLI integrates with existing runtime endpoints:
   - `agent.run_started`
 - `POST /api/agents/runs/:runId/messages`  
   Used to send operator chat input (`role=user`).
-- `GET /api/agents/runs/:runId/events/stream` (SSE)  
-  Preferred live stream when runtime supports run-scoped event streaming.
-- `GET /api/events` (SSE)  
-  Compatibility fallback stream; CLI filters incoming `agent.*` events by `data.runId`.
 - `GET /api/agents/runs/:runId/events`  
-  Used for initial history and fallback polling when SSE is unavailable.
-- `GET /api/agents/runs`  
-  Used to read run status and stop chat when terminal.
+  Used for event rendering in Clarity mode.
 
 ## Run Bootstrap Rules
 
@@ -51,17 +51,18 @@ For `agent.run_created`, the bridge includes API trigger context required by run
 - `requestId`: generated from the run id
 - `caller`: `clarity-agent-cli`
 
-If `--run-id` is supplied, bootstrap events are skipped and CLI attaches to that existing run.
+In the TypeScript fallback engine (`--bridge ts`), `--run-id` is supported and bootstrap can be skipped.
+In Clarity default mode today, `--run-id` is ignored and a fresh run is created.
 
 ## Chat Loop Rules
 
 - Input commands:
-  - `/status`: print current run status
   - `/refresh`: fetch and render latest run events
-  - `/exit` or `/quit`: end session
-- Non-command input is sent as HITL message.
-- Event transport defaults to run-scoped SSE, then global SSE fallback, then poll mode.
-- CLI exits automatically when run status becomes terminal (`completed|failed|cancelled`).
+  - `/exit`: end session
+- Non-command input is sent as run chat input (`POST /api/agents/runs/:runId/messages`, `role=user`).
+- Event transport in Clarity mode uses polling (`GET /api/agents/runs/:runId/events`).
+- TypeScript fallback mode (`--bridge ts`) retains SSE-first transport with polling fallback.
+- CLI exits automatically when terminal run events are observed.
 
 ## Security
 
@@ -73,12 +74,7 @@ If `--run-id` is supplied, bootstrap events are skipped and CLI attaches to that
 - Existing broker commands (`watch`, `list`, `answer`, `cancel`, `serve`, `connect`) are unchanged.
 - Runtime chat is additive and independent from broker file-handshake mode.
 
-## Clarity Rewrite Backlog
+## Migration Notes
 
-- Backlog ID: `CLI-RT-CHAT-CLARITY-001`
-- Priority: `P1`
-- Item: Rewrite runtime chat bridge from TypeScript to native Clarity when language/runtime support is ready.
-- Dependency:
-  - Generic HTTP client functions in Clarity stdlib (GET/POST + headers + status + body).
-  - Structured JSON support beyond flat map parsing (nested objects/arrays).
-  - Ergonomic CLI command parsing helpers for multi-command apps.
+- Default engine is Clarity (`clarity/runtime-chat/main.clarity`), launched by `src/pkg/runtime/clarity-runtime-chat.ts`.
+- TypeScript engine remains available with `--bridge ts` while Clarity mode is hardened to full parity.
