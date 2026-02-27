@@ -19,7 +19,13 @@ This spec adds runtime chat capabilities to `clarity-agent` without changing the
 New commands:
 
 - `clarity-agent runtime-agents <runtimeUrl> [--token]`
-- `clarity-agent runtime-chat <runtimeUrl> <serviceId> [--agent <agentId>] [--run-id <runId>] [--token] [--poll-ms <ms>] [--events-limit <n>]`
+- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--token] [--poll-ms <ms>] [--events-limit <n>]`
+
+Single-start UX for `runtime-chat`:
+
+1. Connect to runtime (use provided `runtimeUrl` or prompt for URL).
+2. Fetch and display agent services as numbered options.
+3. Select one number to connect and start chat.
 
 ## Runtime API Contract (Current Bridge)
 
@@ -59,7 +65,7 @@ If `--run-id` is supplied, bootstrap events are skipped and CLI attaches to that
   - `/status`: print current run status
   - `/refresh`: fetch and render latest run events
   - `/exit` or `/quit`: end session
-- Non-command input is sent as HITL message.
+- Non-command input is sent as run chat input (`POST /api/agents/runs/:runId/messages`, `role=user`).
 - Event transport defaults to run-scoped SSE, then global SSE fallback, then poll mode.
 - CLI exits automatically when run status becomes terminal (`completed|failed|cancelled`).
 
