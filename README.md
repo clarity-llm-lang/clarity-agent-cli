@@ -16,6 +16,8 @@ It follows the HITL broker contract defined in `docs/hitl-broker-spec.md` and su
 - remote broker mode over HTTP/SSE (`/questions`, `/answer`, `/cancel`, `/events`)
 - runtime-agent chat mode over `LLM-runtime` / `Clarity-runtime` APIs (`/api/agents/*`)
 
+`runtime-chat` now runs through a native Clarity program by default.
+
 ## Why this exists
 
 Clarity agents can pause for human input (`hitl_ask`) while running on different hosts and runtimes.
@@ -60,6 +62,10 @@ hitl_ask(key, question)
 npm install
 npm run build
 
+# required for runtime-chat default engine
+# (or set CLARITYC_BIN to a custom compiler binary path)
+npm install -g clarity-lang
+
 # local file mode
 npx clarity-agent watch
 
@@ -81,8 +87,8 @@ npx clarity-agent runtime-agents http://localhost:4707
 # single-start runtime chat flow: connect, pick agent number, chat
 npx clarity-agent runtime-chat http://localhost:4707
 
-# create a run and chat with one runtime agent service directly
-npx clarity-agent runtime-chat http://localhost:4707 svc_123456789abc
+# fallback to the legacy TypeScript bridge
+npx clarity-agent runtime-chat http://localhost:4707 --bridge ts
 ```
 
 You can also invoke the same binary as `clarity-hitl` for compatibility.
@@ -97,19 +103,20 @@ clarity-agent cancel <key> [--dir <path>]
 clarity-agent serve [--dir <path>] [--port <port>] [--token <secret>]
 clarity-agent connect <broker-url> [--token <secret>] [--poll-ms <ms>]
 clarity-agent runtime-agents <runtime-url> [--token <secret>]
-clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
+clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream] [--bridge <clarity|ts>]
 ```
 
 ## Runtime chat flow
 
 1. Start chat with `runtime-chat [runtime-url]`.
-2. CLI connects to runtime and prints a numbered agent list.
+2. Clarity runtime-chat client connects to runtime and prints a numbered agent list.
 3. Select agent number to connect.
-4. CLI creates `agent.run_created` and `agent.run_started` events (unless `--run-id` is provided).
-5. Send messages; CLI posts to `POST /api/agents/runs/:runId/messages` with `role=user`.
-6. CLI streams events via `GET /api/agents/runs/:runId/events/stream` when supported.
-7. If run-scoped stream is unavailable, CLI falls back to `GET /api/events`, then polling.
-8. CLI exits on terminal run status.
+4. Client creates `agent.run_created` and `agent.run_started` events.
+5. Send messages; client posts to `POST /api/agents/runs/:runId/messages` with `role=user`.
+6. Client polls `GET /api/agents/runs/:runId/events` and renders new events.
+7. CLI exits when a terminal run event is observed.
+
+`--bridge ts` keeps the previous TypeScript implementation (including SSE stream fallback logic).
 
 Detailed bridge contract: `docs/runtime-agent-chat-spec.md`.
 
@@ -141,6 +148,8 @@ When `--token` is set on `serve`, include either:
 |   |-- workflows/
 |   `-- ISSUE_TEMPLATE/
 |-- assets/
+|-- clarity/
+|   `-- runtime-chat/
 |-- docs/
 |   |-- hitl-broker-spec.md
 |   `-- runtime-agent-chat-spec.md

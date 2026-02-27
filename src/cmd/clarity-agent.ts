@@ -23,6 +23,7 @@ import {
   type RuntimeAgentRegistryItem,
   type RuntimeRunEvent
 } from "../pkg/runtime/client.js";
+import { runRuntimeChatViaClarity } from "../pkg/runtime/clarity-runtime-chat.js";
 import { promptLine } from "../pkg/tty/prompt.js";
 
 interface SharedDirOptions {
@@ -474,6 +475,7 @@ program
     200
   )
   .option("--no-stream", "Disable SSE streaming and use polling only")
+  .option("--bridge <engine>", "Runtime chat engine: clarity (default) or ts", "clarity")
   .action(
     async (
       runtimeUrlArg: string | undefined,
@@ -485,8 +487,28 @@ program
         pollMs?: number;
         eventsLimit?: number;
         stream?: boolean;
+        bridge?: string;
       }
     ) => {
+      const bridge = (opts.bridge ?? "clarity").trim().toLowerCase();
+      if (bridge !== "clarity" && bridge !== "ts") {
+        throw new Error(`invalid --bridge value: ${opts.bridge}. Use 'clarity' or 'ts'.`);
+      }
+
+      if (bridge === "clarity") {
+        await runRuntimeChatViaClarity({
+          runtimeUrlArg,
+          serviceIdArg,
+          token: opts.token,
+          pollMs: opts.pollMs,
+          eventsLimit: opts.eventsLimit,
+          stream: opts.stream,
+          runId: opts.runId,
+          agent: opts.agent
+        });
+        return;
+      }
+
       const runtimeUrl = await resolveRuntimeUrl(runtimeUrlArg);
       const pollMs = Math.max(300, opts.pollMs ?? 1200);
       const eventsLimit =
