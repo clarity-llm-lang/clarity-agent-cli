@@ -54,6 +54,19 @@ Acceptance criteria:
 - `http_listen` can start a server, route requests, and return responses from Clarity handlers.
 - SSE endpoint support is available or an equivalent stream primitive is provided.
 
+### RQ-LANG-CLI-PKG-001: Multi-module CLI packaging without symbol collisions
+
+Need compiler/runtime support to package multi-module Clarity CLIs under one native Clarity entrypoint without global function-name collisions.
+
+Why:
+
+- Current native command implementations are in Clarity, but top-level dispatch currently uses a thin JS launcher because cross-module helper symbol collisions block a single packed Clarity router.
+
+Acceptance criteria:
+
+- Importing multiple Clarity modules that have same local helper names does not fail codegen.
+- A single packed Clarity CLI binary can dispatch subcommands (`runtime-chat`, `runtime-agents`, `connect`, `answer`) without external JS command routing.
+
 ### RQ-LANG-CLI-FS-003: Optional file watch primitive (nice-to-have)
 
 Need optional fs-watch event primitive.
@@ -87,3 +100,7 @@ Temporarily unsupported (blocked by requirements above):
 - Backlog ID: `LANG-CLI-PARITY-CLARITY-001`
 - Priority: `P1`
 - Item: Implement RQ-LANG-CLI-FS-001, RQ-LANG-CLI-FS-002, and RQ-LANG-CLI-NET-001 to restore full broker command parity in native Clarity.
+
+- Backlog ID: `LANG-CLI-PKG-CLARITY-001`
+- Priority: `P2`
+- Item: Implement RQ-LANG-CLI-PKG-001 so `LLM-cli` can remove JS dispatch and ship a single packed Clarity router binary.
