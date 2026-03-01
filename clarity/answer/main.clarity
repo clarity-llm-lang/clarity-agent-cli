@@ -1,0 +1,81 @@
+module HitlAnswer
+
+import { positional, flag_or } from "std/cli"
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function char_is_safe(ch: String) -> Bool {
+  contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-", ch)
+}
+
+function sanitize_key(raw: String, idx: Int64, acc: String) -> String {
+  match idx >= string_length(raw) {
+    True -> acc,
+    False -> {
+      let ch = char_at(raw, idx);
+      let next = match char_is_safe(ch) {
+        True -> acc ++ ch,
+        False -> acc ++ "_"
+      };
+      sanitize_key(raw, idx + 1, next)
+    }
+  }
+}
+
+function to_safe_key(key: String) -> String {
+  let cleaned = sanitize_key(trim(key), 0, "");
+  match string_length(cleaned) > 0 {
+    True -> cleaned,
+    False -> "question"
+  }
+}
+
+function normalize_dir(raw: String) -> String {
+  let trimmed = trim(raw);
+  match string_length(trimmed) == 0 {
+    True -> ".clarity-hitl",
+    False -> trimmed
+  }
+}
+
+function answer_path(dir: String, safe_key: String) -> String {
+  let trimmed = normalize_dir(dir);
+  match string_ends_with(trimmed, "/") {
+    True -> trimmed ++ safe_key ++ ".answer",
+    False -> trimmed ++ "/" ++ safe_key ++ ".answer"
+  }
+}
+
+export effect[FileSystem, Secret, Log] function run_hitl_answer(args: List<String>) -> Unit {
+  let key = trim(opt_str(positional(args, 0), ""));
+  let response = opt_str(positional(args, 1), "");
+  match string_length(key) == 0 {
+    True -> {
+      print_string("Usage: clarity-agent answer <key> <response> [--dir <path>]");
+      exit(1)
+    },
+    False -> {
+      let dir_flag = trim(flag_or(args, "dir", ""));
+      let dir = match string_length(dir_flag) > 0 {
+        True -> dir_flag,
+        False -> match get_secret("CLARITY_HITL_DIR") {
+          Some(v) -> normalize_dir(v),
+          None -> ".clarity-hitl"
+        }
+      };
+      let safe_key = to_safe_key(key);
+      let path = answer_path(dir, safe_key);
+      write_file(path, response);
+      print_string("Wrote answer: " ++ path)
+    }
+  }
+}
+
+effect[FileSystem, Secret, Log] function main() -> Unit {
+  run_hitl_answer(get_args())
+}
