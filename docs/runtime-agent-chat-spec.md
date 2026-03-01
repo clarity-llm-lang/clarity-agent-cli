@@ -1,80 +1,71 @@
 # Runtime Agent Chat CLI Spec
 
-Status: Active (implemented in native Clarity mode)  
+Status: Active (native Clarity implementation)  
 Owner: `LLM-cli`
 
 ## Goal
 
-Provide a CLI operator flow to:
+Provide a native Clarity operator flow to:
 
 1. Start the CLI.
 2. Connect to `LLM-runtime` / `Clarity-runtime`.
 3. List available agent services.
-4. Connect to one agent run and chat with it.
+4. Select one service and chat.
 
-## Scope
+## Commands
 
-This spec adds runtime chat capabilities to `clarity-agent` without changing the existing HITL broker commands.
-
-Commands:
-
-- `clarity-agent runtime-agents <runtimeUrl> [--token]`
-- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--token] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]`
+- `clarity-agent runtime-agents [runtimeUrl] [--token <secret>]`
+- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]`
 
 Single-start UX for `runtime-chat`:
 
-1. Connect to runtime (use provided `runtimeUrl` or prompt for URL).
-2. Fetch and display agent services as numbered options.
-3. Select one number to connect and start chat.
+1. Connect to runtime (provided URL or prompt).
+2. Fetch and print numbered services from registry.
+3. Select by number (or pass service id).
+4. Start/attach run and enter chat loop.
 
-## Runtime API Contract (Clarity Default Engine)
+## Runtime API Contract
 
-The default `runtime-chat` engine (Clarity) integrates with existing runtime endpoints:
+- `GET /api/agents/registry`
+  - service listing and selection
+- `POST /api/agents/events`
+  - bootstrap run when `--run-id` is omitted
+  - emits `agent.run_created` then `agent.run_started`
+- `POST /api/agents/runs/:runId/messages`
+  - sends operator messages with `role = "user"`
+- `GET /api/agents/runs/:runId/events/stream`
+  - preferred run-scoped SSE stream
+- `GET /api/agents/runs/:runId/events`
+  - fallback polling and `/refresh`
 
-- `GET /api/agents/registry`  
-  Used by `runtime-agents` and for service/agent lookup before chat.
-- `POST /api/agents/events`  
-  Used by `runtime-chat` to create/start a run when `--run-id` is not provided:
-  - `agent.run_created` with `trigger=api`
-  - `agent.run_started`
-- `POST /api/agents/runs/:runId/messages`  
-  Used to send operator chat input (`role=user`).
-- `GET /api/agents/runs/:runId/events/stream` (SSE)  
-  Default live stream channel for runtime run events.
-- `GET /api/agents/runs/:runId/events`  
-  Poll fallback and `/refresh` source.
+## Run bootstrap context
 
-## Run Bootstrap Rules
+`agent.run_created.data` includes:
 
-For `agent.run_created`, the bridge includes API trigger context required by runtime validation:
+- `trigger = "api"`
+- `route = "/cli/runtime-chat"`
+- `method = "CLI"`
+- `requestId = <runId>`
+- `caller = "clarity-agent-cli"`
 
-- `route`: `/cli/runtime-chat`
-- `method`: `CLI`
-- `requestId`: generated from the run id
-- `caller`: `clarity-agent-cli`
+## Chat behavior
 
-If `--run-id` is supplied, bootstrap events are skipped and CLI attaches to that existing run.
-
-## Chat Loop Rules
-
-- Input commands:
-  - `/status`: print run/session metadata
-  - `/refresh`: fetch and render latest run events
-  - `/exit` or `/quit`: end session
-- Non-command input is sent as run chat input (`POST /api/agents/runs/:runId/messages`, `role=user`).
-- Event transport defaults to run-scoped SSE and falls back to polling when stream connection fails.
-- CLI exits automatically when terminal run events are observed.
+- Commands:
+  - `/status`
+  - `/refresh`
+  - `/exit`, `/quit`
+- Non-command input is posted as run chat message.
+- CLI exits on terminal run events:
+  - `agent.run_completed`
+  - `agent.run_failed`
+  - `agent.run_cancelled`
 
 ## Security
 
-- Optional bearer token passed through `Authorization: Bearer <token>`.
-- Runtime-side sanitization/redaction/truncation remains source of truth for HITL message hygiene.
+- Optional bearer token is forwarded as `Authorization: Bearer <token>`.
 
-## Compatibility
+## Implementation location
 
-- Existing broker commands (`watch`, `list`, `answer`, `cancel`, `serve`, `connect`) are unchanged.
-- Runtime chat is additive and independent from broker file-handshake mode.
-
-## Migration Notes
-
-- Runtime chat is fully routed through Clarity (`clarity/runtime-chat/main.clarity`) and launched by `src/pkg/runtime/clarity-runtime-chat.ts`.
+- Dispatcher: `bin/clarity-agent.js`
+- Chat engine: `clarity/runtime-chat/main.clarity`
+- Registry listing: `clarity/runtime-agents/main.clarity`

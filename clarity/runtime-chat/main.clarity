@@ -1,4 +1,4 @@
-module Main
+module RuntimeChat
 
 import { flag_or, flag_int_or, positional, has_flag } from "std/cli"
 import { get, get_or, get_nested, arr_get, arr_len, escape } from "std/json"
@@ -29,7 +29,7 @@ type ChatContext = {
   useStream: Bool
 }
 
-function noop() -> Unit {}
+function noop_rtchat() -> Unit {}
 
 function bool_not(value: Bool) -> Bool {
   match value {
@@ -316,7 +316,7 @@ effect[Network] function send_user_message(ctx: ChatContext, message: String) ->
 effect[Log] function print_agent_rows(items_json: String, idx: Int64) -> Unit {
   let count = arr_len(items_json);
   match idx >= count {
-    True -> noop(),
+    True -> noop_rtchat(),
     False -> {
       match arr_get(items_json, idx) {
         None -> print_string("  " ++ int_to_string(idx + 1) ++ ". <invalid entry>"),
@@ -416,7 +416,7 @@ effect[Log] function apply_event(event_json: String, last_seq: Int64, default_ag
   let is_new = seq > last_seq;
   match is_new {
     True -> render_event(event_json, default_agent),
-    False -> noop()
+    False -> noop_rtchat()
   };
   let kind = get_or(event_json, "kind", "event");
   {
@@ -488,7 +488,7 @@ effect[Network, Log, Time] function poll_after_send(ctx: ChatContext, attempt: I
     False -> {
       match attempt > 0 {
         True -> sleep(ctx.pollMs),
-        False -> noop()
+        False -> noop_rtchat()
       };
       let latest = flush_events(ctx, state.nextSeq);
       let merged = merge_state(state, latest);
@@ -524,7 +524,7 @@ effect[Network, FileSystem, Log, Time] function run_poll_loop(ctx: ChatContext, 
               False -> {
                 match send_user_message(ctx, input) {
                   Err(msg) -> print_string("send error: " ++ msg),
-                  Ok(_) -> noop()
+                  Ok(_) -> noop_rtchat()
                 };
                 let after_send = poll_after_send(
                   ctx,
@@ -536,7 +536,7 @@ effect[Network, FileSystem, Log, Time] function run_poll_loop(ctx: ChatContext, 
                   }
                 );
                 match after_send.sawOutput {
-                  True -> noop(),
+                  True -> noop_rtchat(),
                   False -> print_string("No agent response events yet. Ensure an active runtime agent loop is consuming run messages.")
                 };
                 match after_send.terminal {
@@ -592,7 +592,7 @@ effect[Network, FileSystem, Log, Time] function run_stream_loop(ctx: ChatContext
               False -> {
                 match send_user_message(ctx, input) {
                   Err(msg) -> print_string("send error: " ++ msg),
-                  Ok(_) -> noop()
+                  Ok(_) -> noop_rtchat()
                 };
                 run_stream_loop(ctx, handle, last_seq)
               }
@@ -629,8 +629,7 @@ effect[Network, FileSystem, Log, Time] function start_chat(ctx: ChatContext, las
   }
 }
 
-effect[Network, FileSystem, Log, Time] function main() -> Unit {
-  let args = get_args();
+export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: List<String>) -> Unit {
 
   let runtime_arg = opt_str(positional(args, 0), "");
   let service_arg = opt_str(positional(args, 1), "");
@@ -731,4 +730,8 @@ effect[Network, FileSystem, Log, Time] function main() -> Unit {
       }
     }
   }
+}
+
+effect[Network, FileSystem, Log, Time] function main() -> Unit {
+  run_runtime_chat(get_args())
 }

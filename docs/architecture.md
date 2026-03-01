@@ -1,28 +1,51 @@
 # Clarity Agent CLI architecture
 
-This repository packages the operator-side HITL interface as a standalone CLI + HTTP broker.
+## Overview
 
-## Components
+`clarity-agent-cli` now runs command implementations in native Clarity modules.
+Packaging emits one launcher per command.
 
-- `src/cmd/clarity-agent.ts`: command router and UX
-- `src/pkg/hitl/broker.ts`: file-protocol primitives (`.question`/`.answer`)
-- `src/pkg/hitl/watch.ts`: operator watch loop
-- `src/pkg/http/server.ts`: broker HTTP API + SSE + embedded UI
-- `src/pkg/http/client.ts`: remote broker client used by `connect`
-- `src/pkg/runtime/client.ts`: runtime API client used by `runtime-agents`
-- `src/pkg/runtime/clarity-runtime-chat.ts`: launcher for native Clarity runtime-chat implementation
-- `clarity/runtime-chat/main.clarity`: native runtime-chat program (default engine)
-- `src/pkg/audit/log.ts`: append-only JSONL audit sink
+- Dispatcher: `bin/clarity-agent.js` (no TypeScript)
+- Packed launcher artifacts:
+  - `dist/runtime-chat.cjs`
+  - `dist/runtime-agents.cjs`
+  - `dist/connect.cjs`
+  - `dist/answer.cjs`
+- Packaging mechanism: `clarityc pack`
 
-## Runtime placement
+## Native command modules
 
-This project is designed to run either:
+- `clarity/runtime-chat/main.clarity`
+  - Connects to runtime registry
+  - Selects service by number or service id
+  - Boots run events when needed
+  - Sends chat messages to run-scoped endpoint
+  - Consumes SSE stream with poll fallback
+- `clarity/runtime-agents/main.clarity`
+  - Lists agent services from `/api/agents/registry`
+- `clarity/connect/main.clarity`
+  - Polls remote broker `/questions`
+  - Submits responses via `/answer`
+- `clarity/answer/main.clarity`
+  - Writes local `{safeKey}.answer` for file-protocol HITL
 
-- beside the runtime process on the same filesystem
-- as an HTTP endpoint reachable by remote runtimes using `CLARITY_HITL_BROKER_URL`
+## Compatibility status
 
-## Interface contract
+Supported:
 
-The protocol contract lives in `docs/hitl-broker-spec.md` and is treated as the source of truth.
+- runtime chat over `/api/agents/*`
+- remote broker connect/answer over HTTP
+- local answer-file writing
 
-Runtime-agent chat contract and bridge behavior live in `docs/runtime-agent-chat-spec.md`.
+Blocked pending language/runtime features:
+
+- local file queue operations requiring directory traversal (`watch`, `list`, `cancel` parity)
+- embedded broker HTTP server (`serve` parity)
+
+Gap requirements are tracked in `docs/clarity-language-gap-requirements.md`.
+
+## Validation
+
+- `npm run build` packs all Clarity command launchers.
+- `npm run lint` enforces no TypeScript sources in this repo.
+- `npm run test` validates router behavior and runtime-agent listing contract.

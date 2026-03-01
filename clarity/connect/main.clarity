@@ -1,0 +1,267 @@
+module BrokerConnect
+
+import { positional, flag_or, flag_int_or, has_flag } from "std/cli"
+import { get_or, arr_get, arr_len } from "std/json"
+
+type ConnectState = {
+  seen: List<String>
+}
+
+function noop_connect() -> Unit {}
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
+  }
+}
+
+function strip_trailing_slash(url: String) -> String {
+  let trimmed = trim(url);
+  match string_length(trimmed) == 0 {
+    True -> trimmed,
+    False -> match string_ends_with(trimmed, "/") {
+      True -> strip_trailing_slash(substring(trimmed, 0, string_length(trimmed) - 1)),
+      False -> trimmed
+    }
+  }
+}
+
+function normalize_broker_url(raw: String) -> String {
+  let trimmed = strip_trailing_slash(raw);
+  match string_starts_with(trimmed, "http://") {
+    True -> trimmed,
+    False -> match string_starts_with(trimmed, "https://") {
+      True -> trimmed,
+      False -> "http://" ++ trimmed
+    }
+  }
+}
+
+function auth_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{}",
+    False -> "{\"Authorization\":\"Bearer " ++ json_escape_string(t) ++ "\"}"
+  }
+}
+
+function json_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{\"Content-Type\":\"application/json\"}",
+    False -> "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer " ++ json_escape_string(t) ++ "\"}"
+  }
+}
+
+function is_http_success(status: Int64) -> Bool {
+  status >= 200 and status <= 299
+}
+
+effect[Network] function request_full_checked(
+  method: String,
+  url: String,
+  headers_json: String,
+  body: String
+) -> Result<String, String> {
+  match http_request_full(method, url, headers_json, body) {
+    Err(msg) -> Err(msg),
+    Ok(payload) -> {
+      let status_text = get_or(payload, "status", "0");
+      let response_body = get_or(payload, "body", "");
+      match string_to_int(status_text) {
+        None -> Err(method ++ " " ++ url ++ " returned malformed status"),
+        Some(status) -> match is_http_success(status) {
+          True -> Ok(response_body),
+          False -> Err(method ++ " " ++ url ++ " failed (" ++ status_text ++ "): " ++ response_body)
+        }
+      }
+    }
+  }
+}
+
+effect[Network] function list_remote_questions(base_url: String, token: String) -> Result<String, String> {
+  request_full_checked("GET", base_url ++ "/questions", auth_headers(token), "")
+}
+
+effect[Network] function answer_remote_question(
+  base_url: String,
+  key: String,
+  response_text: String,
+  token: String
+) -> Result<String, String> {
+  let payload =
+    "{"
+      ++ "\"key\":\"" ++ json_escape_string(key) ++ "\","
+      ++ "\"response\":\"" ++ json_escape_string(response_text) ++ "\""
+    ++ "}";
+  request_full_checked("POST", base_url ++ "/answer", json_headers(token), payload)
+}
+
+effect[FileSystem, Log] function prompt_required(prompt: String) -> String {
+  print_string(prompt);
+  let value = trim(read_line());
+  match string_length(value) > 0 {
+    True -> value,
+    False -> {
+      print_string("Value is required.");
+      prompt_required(prompt)
+    }
+  }
+}
+
+effect[FileSystem, Log] function prompt_optional(prompt: String) -> String {
+  print_string(prompt);
+  trim(read_line())
+}
+
+function list_contains(values: List<String>, target: String) -> Bool {
+  match is_empty(values) {
+    True -> False,
+    False -> match head(values) == target {
+      True -> True,
+      False -> list_contains(tail(values), target)
+    }
+  }
+}
+
+function age_seconds(item_json: String, now_ms: Int64) -> Int64 {
+  let direct = parse_int_or(get_or(item_json, "ageSeconds", "-1"), -1);
+  match direct >= 0 {
+    True -> direct,
+    False -> {
+      let ts = parse_int_or(get_or(item_json, "timestamp", "0"), 0);
+      match ts <= 0 {
+        True -> 0,
+        False -> {
+          let diff = (now_ms - ts) / 1000;
+          match diff < 0 {
+            True -> 0,
+            False -> diff
+          }
+        }
+      }
+    }
+  }
+}
+
+effect[Log] function print_question_box(key: String, text: String, age_secs: Int64) -> Unit {
+  print_string("");
+  print_string("Remote HITL request: " ++ key);
+  print_string(text);
+  print_string("Age: " ++ int_to_string(age_secs) ++ "s");
+}
+
+effect[Network, FileSystem, Log, Time] function process_pending(
+  items_json: String,
+  idx: Int64,
+  state: ConnectState,
+  timeout_secs: Int64,
+  auto_approve: Bool,
+  base_url: String,
+  token: String
+) -> ConnectState {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> state,
+    False -> {
+      let next_state = match arr_get(items_json, idx) {
+        None -> state,
+        Some(item_json) -> {
+          let key = trim(get_or(item_json, "key", ""));
+          let text = get_or(item_json, "question", "");
+          let marker = key ++ ":" ++ get_or(item_json, "timestamp", "0");
+          let already_seen = list_contains(state.seen, marker);
+
+          match string_length(key) == 0 or already_seen {
+            True -> state,
+            False -> {
+              let age_secs = age_seconds(item_json, timestamp_to_int(now()));
+              let skip_old = timeout_secs >= 0 and age_secs > timeout_secs;
+              match skip_old {
+                True -> {
+                  print_string("[" ++ timestamp_to_string(now()) ++ "] skipped " ++ key ++ " (age " ++ int_to_string(age_secs) ++ "s > " ++ int_to_string(timeout_secs) ++ "s)");
+                  { seen: append(state.seen, marker) }
+                },
+                False -> {
+                  print_question_box(key, text, age_secs);
+                  let response_text = match auto_approve {
+                    True -> {
+                      print_string("Auto-approve enabled: submitting empty response.");
+                      ""
+                    },
+                    False -> prompt_optional("Remote answer (Enter to confirm): ")
+                  };
+
+                  match answer_remote_question(base_url, key, response_text, token) {
+                    Err(msg) -> print_string("[" ++ timestamp_to_string(now()) ++ "] answer error " ++ key ++ ": " ++ msg),
+                    Ok(_) -> print_string("[" ++ timestamp_to_string(now()) ++ "] answered " ++ key)
+                  };
+                  { seen: append(state.seen, marker) }
+                }
+              }
+            }
+          }
+        }
+      };
+      process_pending(items_json, idx + 1, next_state, timeout_secs, auto_approve, base_url, token)
+    }
+  }
+}
+
+effect[Network, FileSystem, Log, Time] function connect_loop(
+  base_url: String,
+  token: String,
+  poll_ms: Int64,
+  timeout_secs: Int64,
+  auto_approve: Bool,
+  state: ConnectState
+) -> Unit {
+  let next_state = match list_remote_questions(base_url, token) {
+    Err(msg) -> {
+      print_string("[" ++ timestamp_to_string(now()) ++ "] connect error: " ++ msg);
+      state
+    },
+    Ok(body) -> process_pending(body, 0, state, timeout_secs, auto_approve, base_url, token)
+  };
+  sleep(poll_ms);
+  connect_loop(base_url, token, poll_ms, timeout_secs, auto_approve, next_state)
+}
+
+export effect[Network, FileSystem, Log, Time] function run_broker_connect(args: List<String>) -> Unit {
+  let broker_arg = opt_str(positional(args, 0), "");
+  let broker_raw = match string_length(trim(broker_arg)) > 0 {
+    True -> broker_arg,
+    False -> prompt_required("broker url> ")
+  };
+
+  let base_url = normalize_broker_url(broker_raw);
+  let token = trim(flag_or(args, "token", ""));
+  let poll_ms = clamp(300, 5000, flag_int_or(args, "poll-ms", 1200));
+  let timeout_secs = parse_int_or(flag_or(args, "timeout", "-1"), -1);
+  let auto_approve = has_flag(args, "auto-approve");
+
+  print_string("Connecting to broker: " ++ base_url);
+  connect_loop(base_url, token, poll_ms, timeout_secs, auto_approve, { seen: [] })
+}
+
+effect[Network, FileSystem, Log, Time] function main() -> Unit {
+  run_broker_connect(get_args())
+}
