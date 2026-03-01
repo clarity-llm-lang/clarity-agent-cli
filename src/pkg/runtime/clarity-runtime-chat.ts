@@ -53,34 +53,23 @@ function buildProgramArgs(input: ClarityRuntimeChatInput): string[] {
   if (runtimeUrl && runtimeUrl.length > 0) {
     out.push(runtimeUrl);
   }
+  const serviceId = input.serviceIdArg?.trim();
+  if (serviceId && serviceId.length > 0) {
+    out.push(serviceId);
+  }
   appendFlagArg(out, "--token", input.token);
+  appendFlagArg(out, "--agent", input.agent);
+  appendFlagArg(out, "--run-id", input.runId);
   appendFlagInt(out, "--poll-ms", input.pollMs);
+  appendFlagInt(out, "--events-limit", input.eventsLimit);
   if (input.stream === false) {
     out.push("--no-stream");
   }
   return out;
 }
 
-function printUnsupportedOptionWarnings(input: ClarityRuntimeChatInput): void {
-  if (input.serviceIdArg?.trim()) {
-    process.stdout.write(
-      "Clarity runtime-chat uses runtime discovery + numbered selection. Ignoring positional service-id.\n"
-    );
-  }
-  if (input.agent?.trim()) {
-    process.stdout.write("Clarity runtime-chat resolves agent from selected service. Ignoring --agent.\n");
-  }
-  if (input.runId?.trim()) {
-    process.stdout.write("Clarity runtime-chat currently creates a fresh run per session. Ignoring --run-id.\n");
-  }
-  if (typeof input.eventsLimit === "number") {
-    process.stdout.write("Clarity runtime-chat currently uses a fixed event page size. Ignoring --events-limit.\n");
-  }
-}
-
 export async function runRuntimeChatViaClarity(input: ClarityRuntimeChatInput): Promise<void> {
   await ensureScriptExists();
-  printUnsupportedOptionWarnings(input);
 
   const clarityBin = resolveBridgeBinary();
   const programArgs = buildProgramArgs(input);

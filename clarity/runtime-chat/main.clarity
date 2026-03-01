@@ -1,6 +1,10 @@
 module Main
 
+import { flag_or, flag_int_or, positional, has_flag } from "std/cli"
 import { get, get_or, get_nested, arr_get, arr_len, escape } from "std/json"
+import { poll, MuxEvent } from "std/mux"
+import { connect_headers, close } from "std/sse"
+import { encode, query_pair, query_string } from "std/url"
 
 type SelectedAgent = {
   serviceId: String,
@@ -12,6 +16,17 @@ type PollState = {
   nextSeq: Int64,
   sawOutput: Bool,
   terminal: Bool
+}
+
+type ChatContext = {
+  runtimeUrl: String,
+  token: String,
+  serviceId: String,
+  agent: String,
+  runId: String,
+  pollMs: Int64,
+  eventsLimit: Int64,
+  useStream: Bool
 }
 
 function noop() -> Unit {}
@@ -30,6 +45,13 @@ function opt_str(value: Option<String>, fallback: String) -> String {
   }
 }
 
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
 function max_i64_local(a: Int64, b: Int64) -> Int64 {
   match a >= b {
     True -> a,
@@ -37,10 +59,13 @@ function max_i64_local(a: Int64, b: Int64) -> Int64 {
   }
 }
 
-function parse_int_or(text: String, fallback: Int64) -> Int64 {
-  match string_to_int(text) {
-    Some(v) -> v,
-    None -> fallback
+function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
   }
 }
 
@@ -99,18 +124,17 @@ function is_terminal_kind(kind: String) -> Bool {
 }
 
 function parse_seq(event_json: String) -> Int64 {
-  let seq_text = opt_str(get(event_json, "seq"), "0");
-  parse_int_or(seq_text, 0)
+  parse_int_or(opt_str(get(event_json, "seq"), "0"), 0)
 }
 
 function event_message(event_json: String) -> String {
-  let from_data = opt_str(get_nested(event_json, "data.message"), "");
-  match string_length(from_data) > 0 {
-    True -> from_data,
+  let a = opt_str(get_nested(event_json, "data.message"), "");
+  match string_length(a) > 0 {
+    True -> a,
     False -> {
-      let fallback = opt_str(get_nested(event_json, "data.text"), "");
-      match string_length(fallback) > 0 {
-        True -> fallback,
+      let b = opt_str(get_nested(event_json, "data.text"), "");
+      match string_length(b) > 0 {
+        True -> b,
         False -> get_or(event_json, "message", "")
       }
     }
@@ -147,19 +171,19 @@ function trigger_context_json(run_id: String) -> String {
   "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":" ++ quote_json(run_id) ++ ",\"caller\":\"clarity-agent-cli\"}"
 }
 
-function run_created_payload(selected: SelectedAgent, run_id: String) -> String {
+function run_created_payload(service_id: String, agent: String, run_id: String) -> String {
   let ctx = trigger_context_json(run_id);
   "{"
     ++ "\"kind\":\"agent.run_created\","
     ++ "\"level\":\"info\","
     ++ "\"message\":" ++ quote_json("agent.run_created (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(selected.serviceId) ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
     ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(selected.agentId) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
     ++ "\"data\":{"
       ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(selected.serviceId) ++ ","
-      ++ "\"agent\":" ++ quote_json(selected.agentId) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
       ++ "\"trigger\":\"api\","
       ++ "\"triggerContext\":" ++ ctx ++ ","
       ++ "\"route\":\"/cli/runtime-chat\","
@@ -170,89 +194,54 @@ function run_created_payload(selected: SelectedAgent, run_id: String) -> String 
   ++ "}"
 }
 
-function run_started_payload(selected: SelectedAgent, run_id: String) -> String {
+function run_started_payload(service_id: String, agent: String, run_id: String) -> String {
   let ctx = trigger_context_json(run_id);
   "{"
     ++ "\"kind\":\"agent.run_started\","
     ++ "\"level\":\"info\","
     ++ "\"message\":" ++ quote_json("agent.run_started (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(selected.serviceId) ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
     ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(selected.agentId) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
     ++ "\"data\":{"
       ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(selected.serviceId) ++ ","
-      ++ "\"agent\":" ++ quote_json(selected.agentId) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
       ++ "\"trigger\":\"api\","
       ++ "\"triggerContext\":" ++ ctx
     ++ "}"
   ++ "}"
 }
 
-function user_message_payload(selected: SelectedAgent, run_id: String, message: String) -> String {
+function user_message_payload(service_id: String, agent: String, message: String) -> String {
   "{"
     ++ "\"message\":" ++ quote_json(message) ++ ","
     ++ "\"role\":\"user\","
-    ++ "\"service_id\":" ++ quote_json(selected.serviceId) ++ ","
-    ++ "\"agent\":" ++ quote_json(selected.agentId) ++ ","
-    ++ "\"run_id\":" ++ quote_json(run_id)
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent)
   ++ "}"
 }
 
-function run_events_url(runtime_url: String, run_id: String) -> String {
-  runtime_url ++ "/api/agents/runs/" ++ run_id ++ "/events?limit=200"
+function registry_url(base: String) -> String {
+  base ++ "/api/agents/registry"
 }
 
-function run_messages_url(runtime_url: String, run_id: String) -> String {
-  runtime_url ++ "/api/agents/runs/" ++ run_id ++ "/messages"
+function run_events_url(base: String, run_id: String, limit: Int64) -> String {
+  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events?" ++ qs
 }
 
-function first_positional(args: List<String>) -> Option<String> {
-  first_positional_impl(args, False)
+function run_events_stream_url(base: String, run_id: String, limit: Int64) -> String {
+  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events/stream?" ++ qs
 }
 
-function first_positional_impl(args: List<String>, skip_next_value: Bool) -> Option<String> {
-  match is_empty(args) {
-    True -> None,
-    False -> {
-      let h = head(args);
-      let rest = tail(args);
-      match skip_next_value {
-        True -> first_positional_impl(rest, False),
-        False -> match string_starts_with(h, "--") {
-          True -> first_positional_impl(rest, True),
-          False -> Some(h)
-        }
-      }
-    }
-  }
+function run_messages_url(base: String, run_id: String) -> String {
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/messages"
 }
 
-function flag_value(args: List<String>, flag: String) -> Option<String> {
-  match is_empty(args) {
-    True -> None,
-    False -> {
-      let h = head(args);
-      let rest = tail(args);
-      match h == flag {
-        True -> match is_empty(rest) {
-          True -> None,
-          False -> Some(head(rest))
-        },
-        False -> flag_value(rest, flag)
-      }
-    }
-  }
-}
-
-function has_flag(args: List<String>, flag: String) -> Bool {
-  match is_empty(args) {
-    True -> False,
-    False -> match head(args) == flag {
-      True -> True,
-      False -> has_flag(tail(args), flag)
-    }
-  }
+function agents_events_url(base: String) -> String {
+  base ++ "/api/agents/events"
 }
 
 effect[FileSystem, Log] function prompt_required(prompt: String) -> String {
@@ -294,8 +283,34 @@ effect[Network] function request_full_checked(
   }
 }
 
-effect[Network] function fetch_registry(runtime_url: String, token: String) -> Result<String, String> {
-  request_full_checked("GET", runtime_url ++ "/api/agents/registry", auth_headers(token), "")
+effect[Network] function fetch_registry(base: String, token: String) -> Result<String, String> {
+  request_full_checked("GET", registry_url(base), auth_headers(token), "")
+}
+
+effect[Network] function bootstrap_run(ctx: ChatContext) -> Result<String, String> {
+  match request_full_checked(
+    "POST",
+    agents_events_url(ctx.runtimeUrl),
+    json_headers(ctx.token),
+    run_created_payload(ctx.serviceId, ctx.agent, ctx.runId)
+  ) {
+    Err(msg) -> Err(msg),
+    Ok(_) -> request_full_checked(
+      "POST",
+      agents_events_url(ctx.runtimeUrl),
+      json_headers(ctx.token),
+      run_started_payload(ctx.serviceId, ctx.agent, ctx.runId)
+    )
+  }
+}
+
+effect[Network] function send_user_message(ctx: ChatContext, message: String) -> Result<String, String> {
+  request_full_checked(
+    "POST",
+    run_messages_url(ctx.runtimeUrl, ctx.runId),
+    json_headers(ctx.token),
+    user_message_payload(ctx.serviceId, ctx.agent, message)
+  )
 }
 
 effect[Log] function print_agent_rows(items_json: String, idx: Int64) -> Unit {
@@ -315,25 +330,42 @@ effect[Log] function print_agent_rows(items_json: String, idx: Int64) -> Unit {
   }
 }
 
-effect[FileSystem, Log] function select_agent(items_json: String, count: Int64) -> SelectedAgent {
+function find_agent_by_service(items_json: String, idx: Int64, service_id: String) -> Option<SelectedAgent> {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> None,
+    False -> match arr_get(items_json, idx) {
+      None -> find_agent_by_service(items_json, idx + 1, service_id),
+      Some(item_json) -> {
+        let selected = extract_agent(item_json);
+        match selected.serviceId == service_id {
+          True -> Some(selected),
+          False -> find_agent_by_service(items_json, idx + 1, service_id)
+        }
+      }
+    }
+  }
+}
+
+effect[FileSystem, Log] function select_agent_interactive(items_json: String, count: Int64) -> SelectedAgent {
   let raw = prompt_required("agent number> ");
   match string_to_int(raw) {
     None -> {
-      print_string("Invalid selection. Enter a number from 1 to " ++ int_to_string(count) ++ ".");
-      select_agent(items_json, count)
+      print_string("Invalid selection. Enter 1-" ++ int_to_string(count) ++ ".");
+      select_agent_interactive(items_json, count)
     },
     Some(n) -> {
       let valid = n >= 1 and n <= count;
       match valid {
         False -> {
-          print_string("Invalid selection. Enter a number from 1 to " ++ int_to_string(count) ++ ".");
-          select_agent(items_json, count)
+          print_string("Invalid selection. Enter 1-" ++ int_to_string(count) ++ ".");
+          select_agent_interactive(items_json, count)
         },
         True -> match arr_get(items_json, n - 1) {
           Some(item_json) -> extract_agent(item_json),
           None -> {
-            print_string("Agent entry is missing. Try another selection.");
-            select_agent(items_json, count)
+            print_string("Selection not available. Try again.");
+            select_agent_interactive(items_json, count)
           }
         }
       }
@@ -341,46 +373,28 @@ effect[FileSystem, Log] function select_agent(items_json: String, count: Int64) 
   }
 }
 
-effect[Network] function bootstrap_run(
-  runtime_url: String,
-  token: String,
-  selected: SelectedAgent,
-  run_id: String
-) -> Result<String, String> {
-  match request_full_checked(
-    "POST",
-    runtime_url ++ "/api/agents/events",
-    json_headers(token),
-    run_created_payload(selected, run_id)
-  ) {
-    Err(msg) -> Err(msg),
-    Ok(_) -> match request_full_checked(
-      "POST",
-      runtime_url ++ "/api/agents/events",
-      json_headers(token),
-      run_started_payload(selected, run_id)
-    ) {
-      Err(msg) -> Err(msg),
-      Ok(_) -> Ok("ok")
+effect[FileSystem, Log] function resolve_selected_agent(
+  items_json: String,
+  count: Int64,
+  service_arg: String
+) -> Result<SelectedAgent, String> {
+  let trimmed = trim(service_arg);
+  match string_length(trimmed) == 0 {
+    True -> Ok(select_agent_interactive(items_json, count)),
+    False -> {
+      let maybe_index = parse_int_or(trimmed, 0);
+      let by_index = maybe_index >= 1 and maybe_index <= count;
+      match by_index {
+        True -> match arr_get(items_json, maybe_index - 1) {
+          Some(item_json) -> Ok(extract_agent(item_json)),
+          None -> Err("service selection index is not available: " ++ trimmed)
+        },
+        False -> match find_agent_by_service(items_json, 0, trimmed) {
+          Some(selected) -> Ok(selected),
+          None -> Err("service not found in runtime registry: " ++ trimmed)
+        }
+      }
     }
-  }
-}
-
-effect[Network] function send_user_message(
-  runtime_url: String,
-  token: String,
-  selected: SelectedAgent,
-  run_id: String,
-  message: String
-) -> Result<String, String> {
-  match request_full_checked(
-    "POST",
-    run_messages_url(runtime_url, run_id),
-    json_headers(token),
-    user_message_payload(selected, run_id, message)
-  ) {
-    Err(msg) -> Err(msg),
-    Ok(_) -> Ok("ok")
   }
 }
 
@@ -397,54 +411,57 @@ effect[Log] function render_event(event_json: String, default_agent: String) -> 
   }
 }
 
-effect[Log] function scan_events(
-  items_json: String,
-  idx: Int64,
-  previous_seq: Int64,
-  default_agent: String,
-  state: PollState
-) -> PollState {
+effect[Log] function apply_event(event_json: String, last_seq: Int64, default_agent: String) -> PollState {
+  let seq = parse_seq(event_json);
+  let is_new = seq > last_seq;
+  match is_new {
+    True -> render_event(event_json, default_agent),
+    False -> noop()
+  };
+  let kind = get_or(event_json, "kind", "event");
+  {
+    nextSeq: max_i64_local(last_seq, seq),
+    sawOutput: is_new and bool_not(is_operator_input_kind(kind)),
+    terminal: is_new and is_terminal_kind(kind)
+  }
+}
+
+function merge_state(a: PollState, b: PollState) -> PollState {
+  {
+    nextSeq: max_i64_local(a.nextSeq, b.nextSeq),
+    sawOutput: a.sawOutput or b.sawOutput,
+    terminal: a.terminal or b.terminal
+  }
+}
+
+effect[Log] function scan_events(items_json: String, idx: Int64, state: PollState, default_agent: String) -> PollState {
   let count = arr_len(items_json);
   match idx >= count {
     True -> state,
     False -> {
-      let next_state = match arr_get(items_json, idx) {
+      let next = match arr_get(items_json, idx) {
         None -> state,
         Some(event_json) -> {
-          let seq = parse_seq(event_json);
-          let is_new = seq > previous_seq;
-          let next_seq = max_i64_local(state.nextSeq, seq);
-          let kind = get_or(event_json, "kind", "event");
-          match is_new {
-            True -> render_event(event_json, default_agent),
-            False -> noop()
-          };
-          let output_now = is_new and bool_not(is_operator_input_kind(kind));
-          let terminal_now = state.terminal or (is_new and is_terminal_kind(kind));
-          {
-            nextSeq: next_seq,
-            sawOutput: state.sawOutput or output_now,
-            terminal: terminal_now
-          }
+          let one = apply_event(event_json, state.nextSeq, default_agent);
+          merge_state(state, one)
         }
       };
-      scan_events(items_json, idx + 1, previous_seq, default_agent, next_state)
+      scan_events(items_json, idx + 1, next, default_agent)
     }
   }
 }
 
-effect[Network, Log] function poll_events(
-  runtime_url: String,
-  token: String,
-  run_id: String,
-  default_agent: String,
-  previous_seq: Int64
-) -> PollState {
-  match request_full_checked("GET", run_events_url(runtime_url, run_id), auth_headers(token), "") {
+effect[Network, Log] function flush_events(ctx: ChatContext, last_seq: Int64) -> PollState {
+  match request_full_checked(
+    "GET",
+    run_events_url(ctx.runtimeUrl, ctx.runId, ctx.eventsLimit),
+    auth_headers(ctx.token),
+    ""
+  ) {
     Err(msg) -> {
       print_string("event poll error: " ++ msg);
       {
-        nextSeq: previous_seq,
+        nextSeq: last_seq,
         sawOutput: False,
         terminal: False
       }
@@ -454,52 +471,78 @@ effect[Network, Log] function poll_events(
       scan_events(
         items_json,
         0,
-        previous_seq,
-        default_agent,
         {
-          nextSeq: previous_seq,
+          nextSeq: last_seq,
           sawOutput: False,
           terminal: False
-        }
+        },
+        ctx.agent
       )
     }
   }
 }
 
-effect[Network, FileSystem, Log, Time] function chat_loop(
-  runtime_url: String,
-  token: String,
-  selected: SelectedAgent,
-  run_id: String,
-  previous_seq: Int64,
-  poll_ms: Int64
-) -> Unit {
-  let first_poll = poll_events(runtime_url, token, run_id, selected.agentId, previous_seq);
-  match first_poll.terminal {
+effect[Network, Log, Time] function poll_after_send(ctx: ChatContext, attempt: Int64, state: PollState) -> PollState {
+  match attempt >= 6 {
+    True -> state,
+    False -> {
+      match attempt > 0 {
+        True -> sleep(ctx.pollMs),
+        False -> noop()
+      };
+      let latest = flush_events(ctx, state.nextSeq);
+      let merged = merge_state(state, latest);
+      match merged.terminal {
+        True -> merged,
+        False -> match merged.sawOutput {
+          True -> merged,
+          False -> poll_after_send(ctx, attempt + 1, merged)
+        }
+      }
+    }
+  }
+}
+
+effect[Network, FileSystem, Log, Time] function run_poll_loop(ctx: ChatContext, last_seq: Int64) -> Unit {
+  let latest = flush_events(ctx, last_seq);
+  match latest.terminal {
     True -> print_string("Run is terminal. Exiting chat."),
     False -> {
       print_string("you>");
       let input = trim(read_line());
       match string_length(input) == 0 {
-        True -> chat_loop(runtime_url, token, selected, run_id, first_poll.nextSeq, poll_ms),
-        False -> match input == "/exit" {
+        True -> run_poll_loop(ctx, latest.nextSeq),
+        False -> match input == "/exit" or input == "/quit" {
           True -> print_string("Closing runtime chat."),
           False -> match input == "/refresh" {
-            True -> chat_loop(runtime_url, token, selected, run_id, first_poll.nextSeq, poll_ms),
-            False -> {
-              match send_user_message(runtime_url, token, selected, run_id, input) {
-                Err(msg) -> print_string("send error: " ++ msg),
-                Ok(_) -> noop()
-              };
-              sleep(poll_ms);
-              let second_poll = poll_events(runtime_url, token, run_id, selected.agentId, first_poll.nextSeq);
-              match second_poll.sawOutput {
-                True -> noop(),
-                False -> print_string("No agent response events yet. Ensure an active runtime agent loop is consuming run messages.")
-              };
-              match second_poll.terminal {
-                True -> print_string("Run is terminal. Exiting chat."),
-                False -> chat_loop(runtime_url, token, selected, run_id, second_poll.nextSeq, poll_ms)
+            True -> run_poll_loop(ctx, latest.nextSeq),
+            False -> match input == "/status" {
+              True -> {
+                print_string("Run: " ++ ctx.runId ++ " service=" ++ ctx.serviceId ++ " agent=" ++ ctx.agent);
+                run_poll_loop(ctx, latest.nextSeq)
+              },
+              False -> {
+                match send_user_message(ctx, input) {
+                  Err(msg) -> print_string("send error: " ++ msg),
+                  Ok(_) -> noop()
+                };
+                let after_send = poll_after_send(
+                  ctx,
+                  0,
+                  {
+                    nextSeq: latest.nextSeq,
+                    sawOutput: False,
+                    terminal: False
+                  }
+                );
+                match after_send.sawOutput {
+                  True -> noop(),
+                  False -> print_string("No agent response events yet. Ensure an active runtime agent loop is consuming run messages.")
+                };
+                match after_send.terminal {
+                  True -> print_string("Run is terminal. Exiting chat."),
+                  False -> run_poll_loop(ctx, after_send.nextSeq)
+                }
               }
             }
           }
@@ -509,28 +552,108 @@ effect[Network, FileSystem, Log, Time] function chat_loop(
   }
 }
 
+effect[Network, FileSystem, Log, Time] function run_stream_loop(ctx: ChatContext, handle: Int64, last_seq: Int64) -> Unit {
+  match poll(handle, ctx.pollMs) {
+    SseEvent(data) -> {
+      let one = apply_event(data, last_seq, ctx.agent);
+      match one.terminal {
+        True -> {
+          close(handle);
+          print_string("Run is terminal. Exiting chat.")
+        },
+        False -> run_stream_loop(ctx, handle, one.nextSeq)
+      }
+    },
+    StdinLine(line) -> {
+      let input = trim(line);
+      match string_length(input) == 0 {
+        True -> run_stream_loop(ctx, handle, last_seq),
+        False -> match input == "/exit" or input == "/quit" {
+          True -> {
+            close(handle);
+            print_string("Closing runtime chat.")
+          },
+          False -> match input == "/refresh" {
+            True -> {
+              let refreshed = flush_events(ctx, last_seq);
+              match refreshed.terminal {
+                True -> {
+                  close(handle);
+                  print_string("Run is terminal. Exiting chat.")
+                },
+                False -> run_stream_loop(ctx, handle, refreshed.nextSeq)
+              }
+            },
+            False -> match input == "/status" {
+              True -> {
+                print_string("Run: " ++ ctx.runId ++ " service=" ++ ctx.serviceId ++ " agent=" ++ ctx.agent);
+                run_stream_loop(ctx, handle, last_seq)
+              },
+              False -> {
+                match send_user_message(ctx, input) {
+                  Err(msg) -> print_string("send error: " ++ msg),
+                  Ok(_) -> noop()
+                };
+                run_stream_loop(ctx, handle, last_seq)
+              }
+            }
+          }
+        }
+      }
+    },
+    SseEnded -> {
+      close(handle);
+      print_string("Runtime event stream ended. Exiting chat.")
+    },
+    StdinEof -> {
+      close(handle);
+      print_string("stdin closed. Exiting chat.")
+    },
+    Timeout -> run_stream_loop(ctx, handle, last_seq)
+  }
+}
+
+effect[Network, FileSystem, Log, Time] function start_chat(ctx: ChatContext, last_seq: Int64) -> Unit {
+  match ctx.useStream {
+    False -> run_poll_loop(ctx, last_seq),
+    True -> {
+      let url = run_events_stream_url(ctx.runtimeUrl, ctx.runId, ctx.eventsLimit);
+      match connect_headers(url, auth_headers(ctx.token)) {
+        Err(msg) -> {
+          print_string("run stream unavailable: " ++ msg ++ ". Falling back to polling.");
+          run_poll_loop(ctx, last_seq)
+        },
+        Ok(handle) -> run_stream_loop(ctx, handle, last_seq)
+      }
+    }
+  }
+}
+
 effect[Network, FileSystem, Log, Time] function main() -> Unit {
   let args = get_args();
 
-  let runtime_input = match first_positional(args) {
-    Some(value) -> value,
-    None -> prompt_required("runtime url> ")
-  };
+  let runtime_arg = opt_str(positional(args, 0), "");
+  let service_arg = opt_str(positional(args, 1), "");
 
-  let token = match flag_value(args, "--token") {
-    Some(value) -> trim(value),
-    None -> prompt_optional("token (optional)> ")
-  };
-
-  let poll_ms = parse_int_or(opt_str(flag_value(args, "--poll-ms"), "1200"), 1200);
-
-  match has_flag(args, "--no-stream") {
-    True -> print_string("--no-stream provided; clarity runtime-chat currently runs in poll mode by default."),
-    False -> noop()
+  let runtime_input = match string_length(trim(runtime_arg)) > 0 {
+    True -> runtime_arg,
+    False -> prompt_required("runtime url> ")
   };
 
   let runtime_url = normalize_runtime_url(runtime_input);
-  print_string("Clarity Runtime Chat CLI");
+
+  let token_flag = trim(flag_or(args, "token", ""));
+  let token = match string_length(token_flag) > 0 {
+    True -> token_flag,
+    False -> prompt_optional("token (optional)> ")
+  };
+
+  let poll_ms = clamp(100, 5000, flag_int_or(args, "poll-ms", 1200));
+  let events_limit = clamp(1, 5000, flag_int_or(args, "events-limit", 200));
+  let use_stream = bool_not(has_flag(args, "no-stream"));
+
+  let run_id_flag = trim(flag_or(args, "run-id", ""));
+  let agent_override = trim(flag_or(args, "agent", ""));
 
   match fetch_registry(runtime_url, token) {
     Err(msg) -> {
@@ -549,18 +672,59 @@ effect[Network, FileSystem, Log, Time] function main() -> Unit {
           print_string("Connected to runtime: " ++ runtime_url);
           print_string("Select an agent:");
           print_agent_rows(items_json, 0);
-          let selected = select_agent(items_json, count);
-          let run_id = "run_cli_" ++ int_to_string(timestamp_to_int(now()));
-          match bootstrap_run(runtime_url, token, selected, run_id) {
+
+          match resolve_selected_agent(items_json, count, service_arg) {
             Err(msg) -> {
-              print_string("Failed to bootstrap run: " ++ msg);
+              print_string(msg);
               exit(1)
             },
-            Ok(_) -> {
-              print_string("Connected to service " ++ selected.serviceId ++ " (agent " ++ selected.agentId ++ ")");
-              print_string("Run: " ++ run_id);
-              print_string("Commands: /refresh, /exit");
-              chat_loop(runtime_url, token, selected, run_id, 0, poll_ms)
+            Ok(selected) -> {
+              let agent = match string_length(agent_override) > 0 {
+                True -> agent_override,
+                False -> match string_length(selected.agentId) > 0 {
+                  True -> selected.agentId,
+                  False -> selected.name
+                }
+              };
+
+              let run_id = match string_length(run_id_flag) > 0 {
+                True -> run_id_flag,
+                False -> "run_cli_" ++ int_to_string(timestamp_to_int(now()))
+              };
+
+              let attached = string_length(run_id_flag) > 0;
+              let ctx = {
+                runtimeUrl: runtime_url,
+                token: token,
+                serviceId: selected.serviceId,
+                agent: agent,
+                runId: run_id,
+                pollMs: poll_ms,
+                eventsLimit: events_limit,
+                useStream: use_stream
+              };
+
+              match attached {
+                True -> print_string("Attached to run: " ++ run_id),
+                False -> match bootstrap_run(ctx) {
+                  Err(msg) -> {
+                    print_string("Failed to bootstrap run: " ++ msg);
+                    exit(1)
+                  },
+                  Ok(_) -> print_string("Started run: " ++ run_id)
+                }
+              };
+
+              print_string("Runtime: " ++ runtime_url);
+              print_string("Service: " ++ selected.serviceId);
+              print_string("Agent: " ++ agent);
+              print_string("Commands: /status, /refresh, /exit");
+
+              let initial = flush_events(ctx, 0);
+              match initial.terminal {
+                True -> print_string("Run is terminal. Exiting chat."),
+                False -> start_chat(ctx, initial.nextSeq)
+              }
             }
           }
         }

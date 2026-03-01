@@ -87,8 +87,6 @@ npx clarity-agent runtime-agents http://localhost:4707
 # single-start runtime chat flow: connect, pick agent number, chat
 npx clarity-agent runtime-chat http://localhost:4707
 
-# fallback to the legacy TypeScript bridge
-npx clarity-agent runtime-chat http://localhost:4707 --bridge ts
 ```
 
 You can also invoke the same binary as `clarity-hitl` for compatibility.
@@ -103,7 +101,7 @@ clarity-agent cancel <key> [--dir <path>]
 clarity-agent serve [--dir <path>] [--port <port>] [--token <secret>]
 clarity-agent connect <broker-url> [--token <secret>] [--poll-ms <ms>]
 clarity-agent runtime-agents <runtime-url> [--token <secret>]
-clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream] [--bridge <clarity|ts>]
+clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
 ```
 
 ## Runtime chat flow
@@ -115,8 +113,6 @@ clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--ru
 5. Send messages; client posts to `POST /api/agents/runs/:runId/messages` with `role=user`.
 6. Client polls `GET /api/agents/runs/:runId/events` and renders new events.
 7. CLI exits when a terminal run event is observed.
-
-`--bridge ts` keeps the previous TypeScript implementation (including SSE stream fallback logic).
 
 Detailed bridge contract: `docs/runtime-agent-chat-spec.md`.
 

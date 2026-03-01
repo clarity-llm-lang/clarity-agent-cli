@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
   answerQuestion,
@@ -12,16 +11,8 @@ import { runWatch } from "../pkg/hitl/watch.js";
 import { createHitlServer } from "../pkg/http/server.js";
 import { answerRemoteQuestion, listRemoteQuestions } from "../pkg/http/client.js";
 import {
-  getRuntimeRun,
-  isTerminalRunStatus,
   listRuntimeAgents,
-  listRuntimeRunEvents,
-  startRuntimeApiRun,
-  streamRuntimeRunEvents,
-  streamRuntimeEvents,
-  submitRuntimeChatMessage,
-  type RuntimeAgentRegistryItem,
-  type RuntimeRunEvent
+  type RuntimeAgentRegistryItem
 } from "../pkg/runtime/client.js";
 import { runRuntimeChatViaClarity } from "../pkg/runtime/clarity-runtime-chat.js";
 import { promptLine } from "../pkg/tty/prompt.js";
@@ -160,120 +151,6 @@ function printRuntimeAgents(items: RuntimeAgentRegistryItem[]): void {
       `${row.serviceId.padEnd(serviceIdWidth)}  ${row.agentId.padEnd(agentIdWidth)}  ${row.name.padEnd(nameWidth)}  ${row.triggers.padEnd(triggerWidth)}  ${row.lifecycle.padEnd(lifecycleWidth)}  ${row.health.padEnd(healthWidth)}\n`
     );
   }
-}
-
-function runtimeAgentLabel(item: RuntimeAgentRegistryItem): string {
-  const name = item.agent.name || item.displayName || item.serviceId;
-  const agentId = item.agent.agentId || "-";
-  const triggers = item.agent.triggers.length > 0 ? item.agent.triggers.join(",") : "-";
-  return `${name} (${agentId}) service=${item.serviceId} triggers=${triggers} lifecycle=${item.lifecycle} health=${item.health}`;
-}
-
-async function selectRuntimeAgentInteractive(
-  runtimeUrl: string,
-  registry: RuntimeAgentRegistryItem[]
-): Promise<RuntimeAgentRegistryItem> {
-  if (registry.length === 0) {
-    throw new Error(`no agent services are registered on runtime: ${runtimeUrl}`);
-  }
-
-  process.stdout.write(`Connected to runtime: ${runtimeUrl}\n`);
-  process.stdout.write("Select an agent:\n");
-  for (let idx = 0; idx < registry.length; idx += 1) {
-    process.stdout.write(`  ${String(idx + 1).padStart(2, " ")}. ${runtimeAgentLabel(registry[idx])}\n`);
-  }
-
-  while (true) {
-    const answer = (await promptLine(`agent number [1-${registry.length}]> `)).trim();
-    const index = Number.parseInt(answer, 10);
-    if (Number.isInteger(index) && index >= 1 && index <= registry.length) {
-      return registry[index - 1];
-    }
-    process.stdout.write(`Invalid selection '${answer || "(empty)"}'. Enter 1-${registry.length}.\n`);
-  }
-}
-
-async function resolveRuntimeUrl(input: string | undefined): Promise<string> {
-  const candidate = input?.trim();
-  if (candidate && candidate.length > 0) {
-    return candidate;
-  }
-
-  while (true) {
-    const answer = (await promptLine("runtime url> ")).trim();
-    if (answer.length > 0) {
-      return answer;
-    }
-    process.stdout.write("Runtime URL is required.\n");
-  }
-}
-
-function shortTimeLabel(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.valueOf())) {
-    return value;
-  }
-  return parsed.toISOString().slice(11, 19);
-}
-
-function asNonEmptyDataString(data: Record<string, unknown>, ...keys: string[]): string | null {
-  for (const key of keys) {
-    const value = data[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-
-function eventMarker(event: RuntimeRunEvent): string {
-  if (typeof event.seq === "number" && Number.isFinite(event.seq)) {
-    return `seq:${event.seq}`;
-  }
-  return `${event.at}|${event.kind}|${event.message}`;
-}
-
-function renderRuntimeEvent(event: RuntimeRunEvent, defaultAgent: string): string {
-  const data = event.data;
-  const message =
-    asNonEmptyDataString(data, "message", "text", "input") ??
-    asNonEmptyDataString(data, "reason", "waitingReason", "error") ??
-    event.message;
-  const compactMessage = message.replace(/\s+/g, " ").trim();
-  const eventAgent = asNonEmptyDataString(data, "agent", "agentId", "agent_id") ?? defaultAgent;
-  const stamp = shortTimeLabel(event.at);
-  if (
-    event.kind === "agent.hitl_input" ||
-    event.kind === "agent.human_message" ||
-    event.kind === "agent.chat.user_message"
-  ) {
-    return `[${stamp}] you: ${compactMessage}`;
-  }
-  if (event.kind === "agent.chat.assistant_message") {
-    return `[${stamp}] ${eventAgent}: ${compactMessage}`;
-  }
-  if (event.kind === "agent.chat.system_message") {
-    return `[${stamp}] system: ${compactMessage}`;
-  }
-  return `[${stamp}] ${eventAgent} (${event.kind}): ${compactMessage}`;
-}
-
-function runIdFromEventData(event: RuntimeRunEvent): string | null {
-  return asNonEmptyDataString(event.data, "runId", "run_id");
-}
-
-function isTerminalRunEventKind(kind: string): boolean {
-  return (
-    kind === "agent.run_completed" || kind === "agent.run_failed" || kind === "agent.run_cancelled"
-  );
-}
-
-function isOperatorInputEventKind(kind: string): boolean {
-  return (
-    kind === "agent.hitl_input" ||
-    kind === "agent.human_message" ||
-    kind === "agent.chat.user_message"
-  );
 }
 
 const program = new Command();
@@ -461,9 +338,12 @@ program
 
 program
   .command("runtime-chat")
-  .description("Connect to runtime, select an agent, and chat in one flow")
+  .description("Connect to runtime, select an agent, and chat in one flow (native Clarity)")
   .argument("[runtimeUrl]", "Runtime base URL (prompted when omitted)")
-  .argument("[serviceId]", "Agent service id (optional; prompts with numbered selection when omitted)")
+  .argument(
+    "[serviceId]",
+    "Agent service id or list number (optional; prompts with numbered selection when omitted)"
+  )
   .option("--agent <agentId>", "Override agent id (defaults to registry value)")
   .option("--run-id <runId>", "Attach to an existing run instead of creating one")
   .option("--token <secret>", "Optional bearer token")
@@ -475,7 +355,6 @@ program
     200
   )
   .option("--no-stream", "Disable SSE streaming and use polling only")
-  .option("--bridge <engine>", "Runtime chat engine: clarity (default) or ts", "clarity")
   .action(
     async (
       runtimeUrlArg: string | undefined,
@@ -487,273 +366,18 @@ program
         pollMs?: number;
         eventsLimit?: number;
         stream?: boolean;
-        bridge?: string;
       }
     ) => {
-      const bridge = (opts.bridge ?? "clarity").trim().toLowerCase();
-      if (bridge !== "clarity" && bridge !== "ts") {
-        throw new Error(`invalid --bridge value: ${opts.bridge}. Use 'clarity' or 'ts'.`);
-      }
-
-      if (bridge === "clarity") {
-        await runRuntimeChatViaClarity({
-          runtimeUrlArg,
-          serviceIdArg,
-          token: opts.token,
-          pollMs: opts.pollMs,
-          eventsLimit: opts.eventsLimit,
-          stream: opts.stream,
-          runId: opts.runId,
-          agent: opts.agent
-        });
-        return;
-      }
-
-      const runtimeUrl = await resolveRuntimeUrl(runtimeUrlArg);
-      const pollMs = Math.max(300, opts.pollMs ?? 1200);
-      const eventsLimit =
-        Number.isInteger(opts.eventsLimit) && (opts.eventsLimit ?? 0) > 0
-          ? Math.min(opts.eventsLimit ?? 200, 5000)
-          : 200;
-      const useStream = opts.stream !== false;
-
-      const registry = await listRuntimeAgents(runtimeUrl, opts.token);
-      let selected: RuntimeAgentRegistryItem;
-      const serviceId = serviceIdArg?.trim();
-      if (serviceId && serviceId.length > 0) {
-        const resolvedByNumber =
-          /^\d+$/.test(serviceId) && Number.parseInt(serviceId, 10) >= 1 && Number.parseInt(serviceId, 10) <= registry.length
-            ? registry[Number.parseInt(serviceId, 10) - 1]
-            : null;
-        selected =
-          resolvedByNumber ?? registry.find((item) => item.serviceId === serviceId) ?? (() => {
-            const known = registry.map((item) => item.serviceId).join(", ");
-            throw new Error(
-              known.length > 0
-                ? `service not found in runtime registry: ${serviceId}. Known: ${known}`
-                : `service not found in runtime registry: ${serviceId}`
-            );
-          })();
-      } else {
-        selected = await selectRuntimeAgentInteractive(runtimeUrl, registry);
-      }
-      const selectedServiceId = selected.serviceId;
-
-      const agent =
-        opts.agent?.trim() || selected.agent.agentId || selected.agent.name || "unknown-agent";
-      const runId = opts.runId?.trim() || `run_cli_${Date.now()}_${randomUUID().slice(0, 8)}`;
-      const attached = typeof opts.runId === "string" && opts.runId.trim().length > 0;
-
-      if (!attached) {
-        await startRuntimeApiRun(
-          runtimeUrl,
-          {
-            serviceId: selectedServiceId,
-            runId,
-            agent,
-            route: "/cli/runtime-chat",
-            method: "CLI",
-            requestId: runId,
-            caller: "clarity-agent-cli"
-          },
-          opts.token
-        );
-        process.stdout.write(`Started run: ${runId}\n`);
-      } else {
-        process.stdout.write(`Attached to run: ${runId}\n`);
-      }
-
-      process.stdout.write(`Runtime: ${runtimeUrl}\n`);
-      process.stdout.write(`Service: ${selectedServiceId}\n`);
-      process.stdout.write(`Agent: ${agent}\n`);
-      process.stdout.write("Commands: /status, /refresh, /exit\n");
-
-      const seen = new Set<string>();
-      let streamHealthy = false;
-      let streamErrored = false;
-      let terminalByStream: string | null = null;
-      let useRunScopedStream = true;
-      const streamAbort = new AbortController();
-      let nonInputEventCount = 0;
-
-      const recordEvent = (event: RuntimeRunEvent): boolean => {
-        if (runIdFromEventData(event) !== runId) {
-          return false;
-        }
-        const marker = eventMarker(event);
-        if (seen.has(marker)) {
-          return false;
-        }
-        seen.add(marker);
-        process.stdout.write(`${renderRuntimeEvent(event, agent)}\n`);
-        if (!isOperatorInputEventKind(event.kind)) {
-          nonInputEventCount += 1;
-        }
-        if (isTerminalRunEventKind(event.kind)) {
-          terminalByStream = event.kind;
-        }
-        return true;
-      };
-
-      const flushEvents = async (): Promise<number> => {
-        const events = await listRuntimeRunEvents(runtimeUrl, runId, opts.token, eventsLimit);
-        let emitted = 0;
-        for (const event of events) {
-          if (recordEvent(event)) {
-            emitted += 1;
-          }
-        }
-        return emitted;
-      };
-
-      const readStatus = async (): Promise<string | null> => {
-        const run = await getRuntimeRun(runtimeUrl, runId, opts.token);
-        return run ? run.status : null;
-      };
-
-      await flushEvents();
-
-      const streamTask = useStream
-        ? (async (): Promise<void> => {
-            while (!streamAbort.signal.aborted) {
-              try {
-                if (useRunScopedStream) {
-                  await streamRuntimeRunEvents(runtimeUrl, runId, {
-                    token: opts.token,
-                    signal: streamAbort.signal,
-                    limit: eventsLimit,
-                    onOpen: () => {
-                      streamHealthy = true;
-                      streamErrored = false;
-                    },
-                    onEvent: async (event) => {
-                      recordEvent(event);
-                    }
-                  });
-                } else {
-                  await streamRuntimeEvents(runtimeUrl, {
-                    token: opts.token,
-                    signal: streamAbort.signal,
-                    onOpen: () => {
-                      streamHealthy = true;
-                      streamErrored = false;
-                    },
-                    onEvent: async (event) => {
-                      recordEvent(event);
-                    }
-                  });
-                }
-                if (streamAbort.signal.aborted) {
-                  break;
-                }
-                streamHealthy = false;
-                await sleep(pollMs);
-              } catch (error) {
-                if (streamAbort.signal.aborted) {
-                  break;
-                }
-                streamHealthy = false;
-                const message = error instanceof Error ? error.message : String(error);
-                if (useRunScopedStream) {
-                  useRunScopedStream = false;
-                  process.stdout.write(
-                    `[${new Date().toISOString()}] run stream unavailable: ${message}. Falling back to global stream.\n`
-                  );
-                } else {
-                  streamErrored = true;
-                  process.stdout.write(
-                    `[${new Date().toISOString()}] stream error: ${message}. Falling back to polling.\n`
-                  );
-                }
-                await sleep(pollMs);
-              }
-            }
-          })()
-        : null;
-
-      try {
-        while (true) {
-          if (terminalByStream) {
-            process.stdout.write(`Run ${runId} finished (${terminalByStream}). Exiting chat.\n`);
-            await flushEvents();
-            break;
-          }
-
-          const status = await readStatus();
-          if (status && isTerminalRunStatus(status)) {
-            process.stdout.write(`Run ${runId} is terminal (${status}). Exiting chat.\n`);
-            await flushEvents();
-            break;
-          }
-
-          const input = (await promptLine("you> ")).trim();
-          if (!input) {
-            if (!useStream || streamErrored || !streamHealthy) {
-              await flushEvents();
-            }
-            continue;
-          }
-          if (input === "/exit" || input === "/quit") {
-            process.stdout.write("Closing runtime chat.\n");
-            break;
-          }
-          if (input === "/refresh") {
-            await flushEvents();
-            continue;
-          }
-          if (input === "/status") {
-            const current = await readStatus();
-            process.stdout.write(`Run status: ${current ?? "unknown"}\n`);
-            continue;
-          }
-
-          const nonInputCountBeforeSend = nonInputEventCount;
-          await submitRuntimeChatMessage(
-            runtimeUrl,
-            {
-              runId,
-              message: input,
-              serviceId: selectedServiceId,
-              agent,
-              role: "user"
-            },
-            opts.token
-          );
-
-          if (!useStream || streamErrored || !streamHealthy) {
-            let hadNewEvents = false;
-            for (let attempt = 0; attempt < 6; attempt += 1) {
-              if (attempt > 0) {
-                await sleep(pollMs);
-              }
-              const emitted = await flushEvents();
-              if (emitted > 0) {
-                hadNewEvents = true;
-              }
-              const currentStatus = await readStatus();
-              if (currentStatus && isTerminalRunStatus(currentStatus)) {
-                break;
-              }
-              if (hadNewEvents && emitted === 0) {
-                break;
-              }
-            }
-          } else {
-            await sleep(Math.min(900, pollMs));
-          }
-
-          if (nonInputEventCount === nonInputCountBeforeSend) {
-            process.stdout.write(
-              `[${new Date().toISOString()}] no agent response events yet for ${runId}. Input was accepted, but this runtime is only recording HITL input. Ensure an active agent process loop is consuming run events and emitting follow-up agent.* events.\n`
-            );
-          }
-        }
-      } finally {
-        streamAbort.abort();
-        if (streamTask) {
-          await streamTask;
-        }
-      }
+      await runRuntimeChatViaClarity({
+        runtimeUrlArg,
+        serviceIdArg,
+        token: opts.token,
+        agent: opts.agent,
+        runId: opts.runId,
+        pollMs: opts.pollMs,
+        eventsLimit: opts.eventsLimit,
+        stream: opts.stream
+      });
     }
   );
 
