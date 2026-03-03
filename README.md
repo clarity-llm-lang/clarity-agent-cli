@@ -17,14 +17,12 @@ Implemented commands:
 - `runtime-chat` — connect to runtime, select agent, and chat
 - `runtime-agents` — list runtime agent services
 - `connect` — connect to a remote HITL broker (`/questions`, `/answer`)
+- `watch` — poll local `.question` files and answer interactively
+- `list` — list pending local questions
 - `answer` — write a local `.answer` file for file-protocol HITL
+- `cancel` — remove a pending local question file
 
-Temporarily unsupported in native Clarity:
-
-- `watch`
-- `list`
-- `cancel`
-- `serve`
+Temporarily unsupported in native Clarity: `serve`
 
 These are blocked on language/runtime capabilities tracked in `docs/clarity-language-gap-requirements.md`.
 
@@ -56,7 +54,10 @@ npx clarity-agent answer review-step-3 "Looks good"
 clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
 clarity-agent runtime-agents [runtime-url] [--token <secret>]
 clarity-agent connect [broker-url] [--token <secret>] [--poll-ms <ms>] [--timeout <secs>] [--auto-approve]
+clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--log <file>] [--poll-ms <ms>]
+clarity-agent list [dir] [--dir <path>]
 clarity-agent answer <key> <response> [--dir <path>]
+clarity-agent cancel <key> [dir] [--dir <path>]
 ```
 
 ## Runtime chat flow
@@ -73,12 +74,14 @@ clarity-agent answer <key> <response> [--dir <path>]
 ```text
 .
 |-- clarity/
+|   |-- main.clarity
 |   |-- runtime-chat/main.clarity
 |   |-- runtime-agents/main.clarity
 |   |-- connect/main.clarity
+|   |-- watch/main.clarity
+|   |-- list/main.clarity
+|   |-- cancel/main.clarity
 |   `-- answer/main.clarity
-|-- bin/
-|   `-- clarity-agent.js
 |-- docs/
 |   |-- hitl-broker-spec.md
 |   |-- runtime-agent-chat-spec.md
@@ -100,6 +103,5 @@ npm run test
 ## Notes
 
 - `runtime-chat` is fully Clarity-native.
-- Distribution is generated with `clarityc pack` into `dist/runtime-chat.cjs`, `dist/runtime-agents.cjs`, `dist/connect.cjs`, and `dist/answer.cjs`.
-- `bin/clarity-agent.js` is a thin command dispatcher to those packed Clarity launchers.
+- Distribution is generated with `clarityc pack` into `dist/clarity-agent.cjs` from `clarity/main.clarity`.
 - No TypeScript source remains in production CLI paths.

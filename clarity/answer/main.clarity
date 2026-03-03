@@ -68,14 +68,11 @@ export effect[FileSystem, Secret, Log] function run_hitl_answer(args: List<Strin
           None -> ".clarity-hitl"
         }
       };
+      make_dir(dir);
       let safe_key = to_safe_key(key);
       let path = answer_path(dir, safe_key);
       write_file(path, response);
       print_string("Wrote answer: " ++ path)
     }
   }
-}
-
-effect[FileSystem, Secret, Log] function main() -> Unit {
-  run_hitl_answer(get_args())
 }

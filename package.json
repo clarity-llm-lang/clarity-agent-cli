@@ -6,9 +6,9 @@
   "description": "CLI and broker interface for Human-in-the-Loop workflows across Clarity agents",
   "scripts": {
     "build": "npm run build:cli",
-    "build:cli": "mkdir -p dist && clarityc pack clarity/runtime-chat/main.clarity -f main -o dist/runtime-chat.cjs && clarityc pack clarity/runtime-agents/main.clarity -f main -o dist/runtime-agents.cjs && clarityc pack clarity/connect/main.clarity -f main -o dist/connect.cjs && clarityc pack clarity/answer/main.clarity -f main -o dist/answer.cjs && chmod +x dist/runtime-chat.cjs dist/runtime-agents.cjs dist/connect.cjs dist/answer.cjs bin/clarity-agent.js",
-    "dev": "clarityc run clarity/runtime-chat/main.clarity -f main",
-    "start": "node bin/clarity-agent.js",
+    "build:cli": "mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && chmod +x dist/clarity-agent.cjs",
+    "dev": "clarityc run clarity/main.clarity -f main",
+    "start": "node dist/clarity-agent.cjs",
     "lint:clarity": "node scripts/check-no-typescript.mjs",
     "lint": "npm run lint:clarity",
     "format": "prettier --check .",
@@ -17,8 +17,8 @@
     "test:coverage": "npm run test"
   },
   "bin": {
-    "clarity-agent": "bin/clarity-agent.js",
-    "clarity-hitl": "bin/clarity-agent.js"
+    "clarity-agent": "dist/clarity-agent.cjs",
+    "clarity-hitl": "dist/clarity-agent.cjs"
   },
   "dependencies": {
     "clarity-lang": "github:clarity-llm-lang/clarity-compiler#main"

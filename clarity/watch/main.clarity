@@ -1,0 +1,240 @@
+module HitlWatch
+
+import { positional, flag_or, flag_int_or, has_flag } from "std/cli"
+import { get_or } from "std/json"
+
+type WatchState = {
+  markers: List<String>
+}
+
+function noop_watch() -> Unit {}
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
+  }
+}
+
+function max_i64_local(a: Int64, b: Int64) -> Int64 {
+  match a >= b {
+    True -> a,
+    False -> b
+  }
+}
+
+function normalize_dir(raw: String) -> String {
+  let trimmed = trim(raw);
+  match string_length(trimmed) == 0 {
+    True -> ".clarity-hitl",
+    False -> trimmed
+  }
+}
+
+function path_join(dir: String, file: String) -> String {
+  match string_ends_with(dir, "/") {
+    True -> dir ++ file,
+    False -> dir ++ "/" ++ file
+  }
+}
+
+function question_file_name(safe_key: String) -> String {
+  safe_key ++ ".question"
+}
+
+function answer_file_name(safe_key: String) -> String {
+  safe_key ++ ".answer"
+}
+
+function is_question_file(name: String) -> Bool {
+  string_ends_with(name, ".question")
+}
+
+function question_safe_key(file_name: String) -> String {
+  substring(file_name, 0, string_length(file_name) - string_length(".question"))
+}
+
+function list_contains(values: List<String>, target: String) -> Bool {
+  match is_empty(values) {
+    True -> False,
+    False -> match head(values) == target {
+      True -> True,
+      False -> list_contains(tail(values), target)
+    }
+  }
+}
+
+effect[FileSystem, Log] function prompt_optional(prompt: String) -> String {
+  print_string(prompt);
+  trim(read_line())
+}
+
+effect[FileSystem] function append_log(log_path: String, line: String) -> Unit {
+  let prev = match file_exists(log_path) {
+    True -> read_file(log_path),
+    False -> ""
+  };
+  write_file(log_path, prev ++ line ++ "\n")
+}
+
+effect[FileSystem, Secret] function resolve_dir(args: List<String>) -> String {
+  let positional_dir = trim(opt_str(positional(args, 0), ""));
+  let flag_dir = trim(flag_or(args, "dir", ""));
+  let raw = match string_length(flag_dir) > 0 {
+    True -> flag_dir,
+    False -> match string_length(positional_dir) > 0 {
+      True -> positional_dir,
+      False -> match get_secret("CLARITY_HITL_DIR") {
+        Some(v) -> v,
+        None -> ".clarity-hitl"
+      }
+    }
+  };
+  normalize_dir(raw)
+}
+
+effect[FileSystem, Log, Time] function process_file(
+  dir: String,
+  file_name: String,
+  timeout_secs: Int64,
+  auto_approve: Bool,
+  log_file: String,
+  state: WatchState
+) -> WatchState {
+  match is_question_file(file_name) {
+    False -> state,
+    True -> {
+      let safe_key = question_safe_key(file_name);
+      let question_path = path_join(dir, question_file_name(safe_key));
+      let answer_path = path_join(dir, answer_file_name(safe_key));
+      match file_exists(answer_path) {
+        True -> state,
+        False -> {
+          let raw = read_file(question_path);
+          let key = get_or(raw, "key", safe_key);
+          let question = get_or(raw, "question", raw);
+          let timestamp_text = get_or(raw, "timestamp", "0");
+          let marker = safe_key ++ ":" ++ timestamp_text;
+          let already_seen = list_contains(state.markers, marker);
+          match already_seen {
+            True -> state,
+            False -> {
+              let ts_ms = parse_int_or(timestamp_text, 0);
+              let age_secs = match ts_ms <= 0 {
+                True -> 0,
+                False -> max_i64_local(0, (timestamp_to_int(now()) - ts_ms) / 1000)
+              };
+              let should_skip = timeout_secs >= 0 and age_secs > timeout_secs;
+              match should_skip {
+                True -> {
+                  let msg =
+                    "["
+                      ++ timestamp_to_string(now())
+                      ++ "] skipped "
+                      ++ key
+                      ++ " (age "
+                      ++ int_to_string(age_secs)
+                      ++ "s > "
+                      ++ int_to_string(timeout_secs)
+                      ++ "s)";
+                  print_string(msg);
+                  match string_length(log_file) > 0 {
+                    True -> append_log(log_file, msg),
+                    False -> noop_watch()
+                  };
+                  { markers: append(state.markers, marker) }
+                },
+                False -> {
+                  print_string("");
+                  print_string("HITL request: " ++ key);
+                  print_string(question);
+                  print_string("Age: " ++ int_to_string(age_secs) ++ "s");
+                  let response = match auto_approve {
+                    True -> {
+                      print_string("Auto-approve enabled: submitting empty response.");
+                      ""
+                    },
+                    False -> prompt_optional("Answer (Enter to confirm): ")
+                  };
+                  write_file(answer_path, response);
+                  let msg = "[" ++ timestamp_to_string(now()) ++ "] answered " ++ key;
+                  print_string(msg);
+                  match string_length(log_file) > 0 {
+                    True -> append_log(log_file, msg),
+                    False -> noop_watch()
+                  };
+                  { markers: append(state.markers, marker) }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+effect[FileSystem, Log, Time] function process_entries(
+  entries: List<String>,
+  dir: String,
+  timeout_secs: Int64,
+  auto_approve: Bool,
+  log_file: String,
+  state: WatchState
+) -> WatchState {
+  match is_empty(entries) {
+    True -> state,
+    False -> {
+      let next = process_file(dir, head(entries), timeout_secs, auto_approve, log_file, state);
+      process_entries(tail(entries), dir, timeout_secs, auto_approve, log_file, next)
+    }
+  }
+}
+
+effect[FileSystem, Log, Time] function watch_loop(
+  dir: String,
+  timeout_secs: Int64,
+  auto_approve: Bool,
+  log_file: String,
+  poll_ms: Int64,
+  state: WatchState
+) -> Unit {
+  let entries = list_dir(dir);
+  let next = process_entries(entries, dir, timeout_secs, auto_approve, log_file, state);
+  sleep(poll_ms);
+  watch_loop(dir, timeout_secs, auto_approve, log_file, poll_ms, next)
+}
+
+export effect[FileSystem, Secret, Log, Time] function run_hitl_watch(args: List<String>) -> Unit {
+  let dir = resolve_dir(args);
+  let timeout_flag = trim(flag_or(args, "timeout", ""));
+  let timeout_secs = match string_length(timeout_flag) > 0 {
+    True -> parse_int_or(timeout_flag, -1),
+    False -> -1
+  };
+  let auto_approve = has_flag(args, "auto-approve");
+  let log_file = trim(flag_or(args, "log", ""));
+  let poll_ms = clamp(100, 10000, flag_int_or(args, "poll-ms", 1000));
+
+  make_dir(dir);
+
+  print_string("Watching handshake directory: " ++ dir);
+  watch_loop(dir, timeout_secs, auto_approve, log_file, poll_ms, { markers: [] })
+}

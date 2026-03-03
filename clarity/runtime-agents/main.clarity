@@ -144,7 +144,3 @@ export effect[Network, FileSystem, Log] function run_runtime_agents(args: List<S
     }
   }
 }
-
-effect[Network, FileSystem, Log] function main() -> Unit {
-  run_runtime_agents(get_args())
-}

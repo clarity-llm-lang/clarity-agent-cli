@@ -1,0 +1,78 @@
+module Main
+
+import { command_or, has_flag } from "std/cli"
+import { run_runtime_chat } from "./runtime-chat/main"
+import { run_runtime_agents } from "./runtime-agents/main"
+import { run_broker_connect } from "./connect/main"
+import { run_hitl_answer } from "./answer/main"
+import { run_hitl_watch } from "./watch/main"
+import { run_hitl_list } from "./list/main"
+import { run_hitl_cancel } from "./cancel/main"
+
+effect[Log] function usage() -> Unit {
+  print_string("Clarity Agent CLI (native Clarity)");
+  print_string("");
+  print_string("Usage:");
+  print_string("  clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]");
+  print_string("  clarity-agent runtime-agents [runtime-url] [--token <secret>]");
+  print_string("  clarity-agent connect [broker-url] [--token <secret>] [--poll-ms <ms>] [--timeout <secs>] [--auto-approve]");
+  print_string("  clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--log <file>] [--poll-ms <ms>]");
+  print_string("  clarity-agent list [dir] [--dir <path>]");
+  print_string("  clarity-agent answer <key> <response> [--dir <path>]");
+  print_string("  clarity-agent cancel <key> [dir] [--dir <path>]");
+  print_string("");
+  print_string("Temporarily unsupported in native Clarity:");
+  print_string("  serve");
+}
+
+effect[Log] function unsupported_message(cmd: String) -> Unit {
+  print_string("Command not yet available in native Clarity: " ++ cmd);
+  print_string("Tracked requirements:");
+  print_string("  - RQ-LANG-CLI-NET-001 (http_listen runtime implementation)");
+}
+
+effect[Network, FileSystem, Secret, Log, Time] function main() -> Unit {
+  let args = get_args();
+  let show_help = has_flag(args, "help") or has_flag(args, "h");
+  let cmd = command_or(args, "");
+  let sub_args = match is_empty(args) {
+    True -> [],
+    False -> tail(args)
+  };
+
+  match show_help or string_length(cmd) == 0 {
+    True -> usage(),
+    False -> match cmd == "runtime-chat" {
+      True -> run_runtime_chat(sub_args),
+      False -> match cmd == "runtime-agents" {
+        True -> run_runtime_agents(sub_args),
+        False -> match cmd == "connect" {
+          True -> run_broker_connect(sub_args),
+          False -> match cmd == "answer" {
+            True -> run_hitl_answer(sub_args),
+            False -> match cmd == "watch" {
+              True -> run_hitl_watch(sub_args),
+              False -> match cmd == "list" {
+                True -> run_hitl_list(sub_args),
+                False -> match cmd == "cancel" {
+                  True -> run_hitl_cancel(sub_args),
+                  False -> match cmd == "serve" {
+                    True -> {
+                      unsupported_message(cmd);
+                      exit(2)
+                    },
+                    False -> {
+                      print_string("Unknown command: " ++ cmd);
+                      usage();
+                      exit(1)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

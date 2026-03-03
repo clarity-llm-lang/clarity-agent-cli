@@ -731,7 +731,3 @@ export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: Li
     }
   }
 }
-
-effect[Network, FileSystem, Log, Time] function main() -> Unit {
-  run_runtime_chat(get_args())
-}

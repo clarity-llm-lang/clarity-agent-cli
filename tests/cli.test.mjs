@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const cliPath = path.resolve("bin/clarity-agent.js");
+const cliPath = path.resolve("dist/clarity-agent.cjs");
 
 function runCli(args, input = "") {
   return new Promise((resolve, reject) => {
@@ -36,16 +38,19 @@ function runCli(args, input = "") {
 test("help output is printed from native clarity router", async () => {
   const result = await runCli(["--help"]);
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /Clarity Agent CLI \(native Clarity commands\)/);
+  assert.match(result.stdout, /Clarity Agent CLI \(native Clarity\)/);
   assert.match(result.stdout, /runtime-chat/);
   assert.match(result.stdout, /runtime-agents/);
+  assert.match(result.stdout, /watch/);
+  assert.match(result.stdout, /list/);
+  assert.match(result.stdout, /cancel/);
 });
 
 test("unsupported command exits with requirements guidance", async () => {
-  const result = await runCli(["watch"]);
+  const result = await runCli(["serve"]);
   assert.equal(result.code, 2);
-  assert.match(result.stdout, /Command not yet available in native Clarity: watch/);
-  assert.match(result.stdout, /RQ-LANG-CLI-FS-001/);
+  assert.match(result.stdout, /Command not yet available in native Clarity: serve/);
+  assert.match(result.stdout, /RQ-LANG-CLI-NET-001/);
 });
 
 test("runtime-agents lists entries from runtime registry", async () => {
@@ -93,5 +98,49 @@ test("runtime-agents lists entries from runtime registry", async () => {
     assert.match(result.stdout, /service=svc-1/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("list and cancel operate on local question files", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clarity-hitl-"));
+  const questionPath = path.join(dir, "review-step-3.question");
+  const questionPayload = {
+    key: "review-step-3",
+    question: "Does this summary look correct?",
+    timestamp: Date.now(),
+    pid: 1234
+  };
+  await writeFile(questionPath, JSON.stringify(questionPayload), "utf8");
+
+  try {
+    const listBefore = await runCli(["list", "--dir", dir]);
+    assert.equal(listBefore.code, 0);
+    assert.match(listBefore.stdout, /Handshake directory:/);
+    assert.match(listBefore.stdout, /review-step-3/);
+
+    const cancel = await runCli(["cancel", "review-step-3", "--dir", dir]);
+    assert.equal(cancel.code, 0);
+    assert.match(cancel.stdout, /Cancelled: review-step-3/);
+
+    const listAfter = await runCli(["list", "--dir", dir]);
+    assert.equal(listAfter.code, 0);
+    assert.match(listAfter.stdout, /No pending questions/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("answer writes .answer file", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clarity-hitl-"));
+
+  try {
+    const result = await runCli(["answer", "review-step-9", "Looks good", "--dir", dir]);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Wrote answer:/);
+    const answerPath = path.join(dir, "review-step-9.answer");
+    const content = await readFile(answerPath, "utf8");
+    assert.equal(content, "Looks good");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
