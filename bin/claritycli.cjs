@@ -235,6 +235,8 @@ async function waitForAgentResponse(runtimeUrl, token, runId, state) {
   while (Date.now() < deadline) {
     const items = await fetchEvents(runtimeUrl, token, runId);
     let gotResponse = false;
+    let sawAssistantEvent = false;
+    let fallbackStepCompletedMessage = "";
     for (const item of items) {
       const seq = Number(item?.seq || 0);
       if (!Number.isFinite(seq) || seq <= state.lastSeq) continue;
@@ -244,13 +246,25 @@ async function waitForAgentResponse(runtimeUrl, token, runId, state) {
         const msg = eventMessage(item);
         if (msg) {
           process.stdout.write(`bot> ${msg}\n`);
+          sawAssistantEvent = true;
           gotResponse = true;
+        }
+      } else if (kind === "agent.step_completed") {
+        const msg = eventMessage(item);
+        if (msg) {
+          // Some runtime paths emit chat replies as step_completed.data.message.
+          // Keep the latest fallback candidate in case no assistant_message is emitted.
+          fallbackStepCompletedMessage = msg;
         }
       } else if (isTerminalEvent(kind)) {
         process.stdout.write(`bot> [${kind}]\n`);
         state.terminal = true;
         return;
       }
+    }
+    if (!sawAssistantEvent && fallbackStepCompletedMessage) {
+      process.stdout.write(`bot> ${fallbackStepCompletedMessage}\n`);
+      gotResponse = true;
     }
     if (gotResponse || state.terminal) return;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
