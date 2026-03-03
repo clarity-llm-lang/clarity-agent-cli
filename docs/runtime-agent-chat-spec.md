@@ -66,6 +66,7 @@ Single-start UX for `runtime-chat`:
 
 ## Implementation location
 
-- Dispatcher: `bin/clarity-agent.js`
+- Router: `clarity/main.clarity`
+- Packed launcher: `dist/clarity-agent.cjs`
 - Chat engine: `clarity/runtime-chat/main.clarity`
 - Registry listing: `clarity/runtime-agents/main.clarity`

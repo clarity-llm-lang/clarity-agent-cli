@@ -1,0 +1,125 @@
+module HitlList
+
+import { positional, flag_or } from "std/cli"
+import { get_or } from "std/json"
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function max_i64_local(a: Int64, b: Int64) -> Int64 {
+  match a >= b {
+    True -> a,
+    False -> b
+  }
+}
+
+function normalize_dir(raw: String) -> String {
+  let trimmed = trim(raw);
+  match string_length(trimmed) == 0 {
+    True -> ".clarity-hitl",
+    False -> trimmed
+  }
+}
+
+function path_join(dir: String, file: String) -> String {
+  match string_ends_with(dir, "/") {
+    True -> dir ++ file,
+    False -> dir ++ "/" ++ file
+  }
+}
+
+function question_file_name(safe_key: String) -> String {
+  safe_key ++ ".question"
+}
+
+function answer_file_name(safe_key: String) -> String {
+  safe_key ++ ".answer"
+}
+
+function is_question_file(name: String) -> Bool {
+  string_ends_with(name, ".question")
+}
+
+function question_safe_key(file_name: String) -> String {
+  substring(file_name, 0, string_length(file_name) - string_length(".question"))
+}
+
+effect[FileSystem, Secret] function resolve_dir(args: List<String>) -> String {
+  let positional_dir = trim(opt_str(positional(args, 0), ""));
+  let flag_dir = trim(flag_or(args, "dir", ""));
+  let raw = match string_length(flag_dir) > 0 {
+    True -> flag_dir,
+    False -> match string_length(positional_dir) > 0 {
+      True -> positional_dir,
+      False -> match get_secret("CLARITY_HITL_DIR") {
+        Some(v) -> v,
+        None -> ".clarity-hitl"
+      }
+    }
+  };
+  normalize_dir(raw)
+}
+
+effect[Log] function print_row(key: String, age_secs: Int64, question: String) -> Unit {
+  print_string(key ++ "  " ++ int_to_string(age_secs) ++ "s  " ++ trim(question))
+}
+
+effect[FileSystem, Log, Time] function print_pending_from_entries(
+  entries: List<String>,
+  dir: String,
+  count: Int64
+) -> Int64 {
+  match is_empty(entries) {
+    True -> count,
+    False -> {
+      let name = head(entries);
+      let rest = tail(entries);
+      match is_question_file(name) {
+        False -> print_pending_from_entries(rest, dir, count),
+        True -> {
+          let safe_key = question_safe_key(name);
+          let answer_path = path_join(dir, answer_file_name(safe_key));
+          match file_exists(answer_path) {
+            True -> print_pending_from_entries(rest, dir, count),
+            False -> {
+              let question_path = path_join(dir, question_file_name(safe_key));
+              let raw = read_file(question_path);
+              let key = get_or(raw, "key", safe_key);
+              let question = get_or(raw, "question", raw);
+              let timestamp_ms = parse_int_or(get_or(raw, "timestamp", "0"), 0);
+              let age_secs = match timestamp_ms <= 0 {
+                True -> 0,
+                False -> max_i64_local(0, (timestamp_to_int(now()) - timestamp_ms) / 1000)
+              };
+              print_row(key, age_secs, question);
+              print_pending_from_entries(rest, dir, count + 1)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export effect[FileSystem, Secret, Log, Time] function run_hitl_list(args: List<String>) -> Unit {
+  let dir = resolve_dir(args);
+  make_dir(dir);
+  print_string("Handshake directory: " ++ dir);
+  print_string("key  age  question");
+  let count = print_pending_from_entries(list_dir(dir), dir, 0);
+  match count <= 0 {
+    True -> print_string("No pending questions."),
+    False -> print_string("Pending: " ++ int_to_string(count))
+  }
+}

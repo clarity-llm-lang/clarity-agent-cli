@@ -2,15 +2,10 @@
 
 ## Overview
 
-`clarity-agent-cli` now runs command implementations in native Clarity modules.
-Packaging emits one launcher per command.
+`clarity-agent-cli` now runs through a single native Clarity router.
 
-- Dispatcher: `bin/clarity-agent.js` (no TypeScript)
-- Packed launcher artifacts:
-  - `dist/runtime-chat.cjs`
-  - `dist/runtime-agents.cjs`
-  - `dist/connect.cjs`
-  - `dist/answer.cjs`
+- Clarity entrypoint: `clarity/main.clarity`
+- Packed launcher artifact: `dist/clarity-agent.cjs`
 - Packaging mechanism: `clarityc pack`
 
 ## Native command modules
@@ -26,6 +21,12 @@ Packaging emits one launcher per command.
 - `clarity/connect/main.clarity`
   - Polls remote broker `/questions`
   - Submits responses via `/answer`
+- `clarity/watch/main.clarity`
+  - Polls `.question` files and captures operator responses
+- `clarity/list/main.clarity`
+  - Lists pending local questions from handshake directory
+- `clarity/cancel/main.clarity`
+  - Removes pending local question files
 - `clarity/answer/main.clarity`
   - Writes local `{safeKey}.answer` for file-protocol HITL
 
@@ -36,16 +37,16 @@ Supported:
 - runtime chat over `/api/agents/*`
 - remote broker connect/answer over HTTP
 - local answer-file writing
+- local file-protocol watch/list/cancel flow
 
 Blocked pending language/runtime features:
 
-- local file queue operations requiring directory traversal (`watch`, `list`, `cancel` parity)
 - embedded broker HTTP server (`serve` parity)
 
 Gap requirements are tracked in `docs/clarity-language-gap-requirements.md`.
 
 ## Validation
 
-- `npm run build` packs all Clarity command launchers.
+- `npm run build` packs the single Clarity router launcher.
 - `npm run lint` enforces no TypeScript sources in this repo.
-- `npm run test` validates router behavior and runtime-agent listing contract.
+- `npm run test` validates router behavior, runtime-agent listing, and local HITL list/cancel behavior.

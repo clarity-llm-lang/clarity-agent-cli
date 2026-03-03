@@ -67,14 +67,14 @@ Native Clarity supports:
 - `runtime-chat`
 - `runtime-agents`
 - `connect`
+- `watch`
+- `list`
 - `answer`
+- `cancel`
 
 Temporarily unsupported (blocked by requirements above):
 
-- `watch` — needs polling loop (FS primitives now available)
-- `list` — needs `list_dir` + `file_exists` (now available)
-- `cancel` — needs `remove_file` (now available)
-- `serve` — blocked by RQ-LANG-CLI-NET-001 (HTTP server)
+- `serve` — blocked by RQ-LANG-CLI-NET-001 (HTTP server primitive)
 
 ## Backlog item
 
