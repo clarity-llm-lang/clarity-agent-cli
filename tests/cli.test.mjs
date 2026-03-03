@@ -7,10 +7,38 @@ import path from "node:path";
 import test from "node:test";
 
 const cliPath = path.resolve("dist/clarity-agent.cjs");
+const clarityUiPath = path.resolve("bin/claritycli.cjs");
 
 function runCli(args, input = "") {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
+      env: process.env
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code, stdout, stderr });
+    });
+
+    if (input.length > 0) {
+      child.stdin.write(input);
+    }
+    child.stdin.end();
+  });
+}
+
+function runUiCli(args, input = "") {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [clarityUiPath, ...args], {
       env: process.env
     });
 
@@ -44,6 +72,12 @@ test("help output is printed from native clarity router", async () => {
   assert.match(result.stdout, /watch/);
   assert.match(result.stdout, /list/);
   assert.match(result.stdout, /cancel/);
+});
+
+test("claritycli help is available", async () => {
+  const result = await runUiCli(["--help"]);
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /claritycli \[runtime-url\]/);
 });
 
 test("unsupported command exits with requirements guidance", async () => {

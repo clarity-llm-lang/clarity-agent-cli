@@ -6,6 +6,7 @@
 
 - Clarity entrypoint: `clarity/main.clarity`
 - Packed launcher artifact: `dist/clarity-agent.cjs`
+- Operator UX wrapper: `bin/claritycli.cjs` (arrow-key selector + chat transcript UX)
 - Packaging mechanism: `clarityc pack`
 
 ## Native command modules

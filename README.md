@@ -24,6 +24,22 @@ Implemented commands:
 
 Temporarily unsupported in native Clarity: `serve`
 
+## Operator UX command
+
+Use `claritycli` for the streamlined chat UX:
+
+- default target when no args are provided: `http://localhost:4707`
+- arrow-key (`up/down`) agent selection
+- simple chat transcript:
+  - `you> ...`
+  - `bot> ...`
+
+`claritycli` accepts:
+
+```bash
+claritycli [runtime-url] [--token <secret>]
+```
+
 These are blocked on language/runtime capabilities tracked in `docs/clarity-language-gap-requirements.md`.
 
 ## Install and run
@@ -34,6 +50,9 @@ npm run build
 
 # show help
 npx clarity-agent --help
+
+# streamlined operator UX (defaults to localhost:4707)
+npx claritycli
 
 # list runtime agents
 npx clarity-agent runtime-agents http://localhost:4707
