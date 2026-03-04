@@ -86,32 +86,26 @@ Architecture: single mux worker manages N concurrent HTTP GET + SSE connections 
 
 **Implemented (2026-03-03):** Private (non-exported) functions from each module are now given collision-free WASM names by prefixing them with their module name (e.g. `ModuleName$funcName`). Call sites within each module resolve to the correct WASM name via a per-module name resolution table built during codegen. Exported functions keep their plain Clarity name. Covered by e2e test "multi-module symbol collision".
 
-### RQ-LANG-CLI-PKG-002: Installable compiler distribution for git dependency
+### RQ-LANG-CLI-PKG-002: Installable compiler distribution for git dependency ✅ DONE
 
-Need a stable install path for `clarity-lang` when consumed as a git dependency.
+~~Need a stable install path for `clarity-lang` when consumed as a git dependency.~~
 
-Why:
+**Implemented (2026-03-04):**
+- `dist/` removed from `.gitignore` and committed to the repository.
+- Pre-built `dist/index.js` (the `clarityc` binary) is now tracked in git, so `npm ci` in `LLM-cli` yields a working `clarityc` in `node_modules/.bin` without needing `prepare` to run.
+- Pre-existing TypeScript error in `codegen.ts` (Option case accessing `type.variants` instead of `type.inner`) that was causing `tsc` / `prepare` to fail has been fixed.
+- All HTTP server builtins, TTY builtins, and mux builtins are present in the committed `dist/`.
 
-- `LLM-cli` depends on `clarityc pack` in CI/build.
-- Current git dependency path can fail during `prepare` (`tsc`) and may not provide a ready-to-run `clarityc` binary without local manual linking/workarounds.
+### RQ-LANG-CLI-FS-003: Optional file watch primitive ✅ DONE
 
-Acceptance criteria:
+~~Need optional fs-watch event primitive.~~
 
-- `npm ci` in `LLM-cli` yields a working `clarityc` command in `node_modules/.bin`.
-- No manual `npm install --ignore-scripts` / local symlink workaround is needed.
-- HTTP server builtins (`http_listen`, `http_next_request`, `http_respond`, SSE helpers) are available in the installed compiler used by `LLM-cli`.
+**Implemented (2026-03-04):** Three new `fs_watch_*` builtins (all require `FileSystem` effect):
+- `fs_watch_start(path: String) -> Result<Int64, String>` — start watching a file or directory; returns `Ok(handle)` on success or `Err(message)` if the path cannot be watched. Uses `fs.watch({ recursive: true })` — OS-level APIs (FSEvents on macOS, inotify on Linux) with automatic polling fallback where native APIs are unavailable.
+- `fs_watch_next(handle: Int64, timeout_ms: Int64) -> Option<String>` — block until a change event arrives or `timeout_ms` elapses. Returns `Some(event_json)` where event_json is `{"event":"change"|"rename","filename":"relative/path"}`, or `None` on timeout.
+- `fs_watch_stop(handle: Int64) -> Unit` — stop watching and release the handle.
 
-### RQ-LANG-CLI-FS-003: Optional file watch primitive (nice-to-have)
-
-Need optional fs-watch event primitive.
-
-Why:
-
-- `watch` can be implemented by polling once FS primitives exist, but event-based watch lowers latency and CPU usage.
-
-Acceptance criteria:
-
-- Clarity can subscribe to directory change notifications, with polling fallback documented.
+Architecture: Worker runs `fs.watch()` and queues events; main thread blocks via SAB + `Atomics.wait`. Events tagged with `event` (change/rename) and `filename` (relative path within watched tree).
 
 ## Current behavior in `LLM-cli`
 
@@ -146,9 +140,9 @@ All previously blocked commands are now unblocked:
 - Item: ~~Implement RQ-LANG-CLI-ROOM-001 to support native multi-agent room/discuss chat orchestration in Clarity.~~ Done.
 
 - Backlog ID: `LANG-CLI-PKG-002`
-- Priority: `P1`
-- Item: Implement RQ-LANG-CLI-PKG-002 so `LLM-cli` can consume updated `clarity-lang` from git without manual local installation workarounds.
+- Priority: `P1` ✅ DONE (2026-03-04)
+- Item: ~~Implement RQ-LANG-CLI-PKG-002 so `LLM-cli` can consume updated `clarity-lang` from git without manual local installation workarounds.~~ Done.
 
 - Backlog ID: `LANG-CLI-FS-003`
-- Priority: `P3` (nice-to-have)
-- Item: Implement RQ-LANG-CLI-FS-003 optional file watch primitive for lower-latency `watch` command.
+- Priority: `P3` ✅ DONE (2026-03-04)
+- Item: ~~Implement RQ-LANG-CLI-FS-003 optional file watch primitive for lower-latency `watch` command.~~ Done.

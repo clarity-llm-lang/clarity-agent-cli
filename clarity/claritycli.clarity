@@ -1,0 +1,1338 @@
+module ClarityCli
+
+import { positional, flag_or, has_flag } from "std/cli"
+import { get, get_or, get_nested_or, arr_get, arr_len, escape } from "std/json"
+import { encode } from "std/url"
+
+type AgentChoice = {
+  serviceId: String,
+  agentId: String,
+  displayName: String
+}
+
+type Participant = {
+  alias: String,
+  serviceId: String,
+  agentId: String,
+  displayName: String,
+  runId: String,
+  lastSeq: Int64,
+  terminal: Bool
+}
+
+type HistoryRow = {
+  speaker: String,
+  text: String
+}
+
+type ChatState = {
+  participants: List<Participant>,
+  history: List<HistoryRow>
+}
+
+type EventScan = {
+  participant: Participant,
+  assistantMessage: String,
+  stepCompletedMessage: String,
+  terminalKind: String
+}
+
+type TurnScan = {
+  nextSeq: Int64,
+  assistantMessage: String,
+  stepCompletedMessage: String,
+  terminalKind: String
+}
+
+type PendingLines = {
+  rendered: Int64
+}
+
+function noop_cliui() -> Unit {}
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function non_empty_or(value: String, fallback: String) -> String {
+  match string_length(trim(value)) > 0 {
+    True -> value,
+    False -> fallback
+  }
+}
+
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
+  }
+}
+
+function bool_not(value: Bool) -> Bool {
+  match value {
+    True -> False,
+    False -> True
+  }
+}
+
+function strip_trailing_slash(url: String) -> String {
+  let trimmed = trim(url);
+  match string_length(trimmed) == 0 {
+    True -> trimmed,
+    False -> match string_ends_with(trimmed, "/") {
+      True -> strip_trailing_slash(substring(trimmed, 0, string_length(trimmed) - 1)),
+      False -> trimmed
+    }
+  }
+}
+
+function normalize_runtime_url(raw: String) -> String {
+  let trimmed = strip_trailing_slash(raw);
+  match string_length(trimmed) == 0 {
+    True -> "http://localhost:4707",
+    False -> match string_starts_with(trimmed, "http://") {
+      True -> trimmed,
+      False -> match string_starts_with(trimmed, "https://") {
+        True -> trimmed,
+        False -> "http://" ++ trimmed
+      }
+    }
+  }
+}
+
+function quote_json(value: String) -> String {
+  "\"" ++ escape(value) ++ "\""
+}
+
+function auth_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{}",
+    False -> "{\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
+  }
+}
+
+function json_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{\"Content-Type\":\"application/json\"}",
+    False -> "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
+  }
+}
+
+function is_http_success(status: Int64) -> Bool {
+  status >= 200 and status <= 299
+}
+
+function display_agent(item_json: String) -> String {
+  let service_id = get_or(item_json, "serviceId", "unknown-service");
+  let fallback = get_or(item_json, "displayName", service_id);
+  let name = non_empty_or(get_nested_or(item_json, "agent.name", ""), fallback);
+  let agent_id = non_empty_or(get_nested_or(item_json, "agent.agentId", ""), fallback);
+  name ++ " (" ++ agent_id ++ ") [" ++ service_id ++ "]"
+}
+
+function extract_agent(item_json: String) -> AgentChoice {
+  let service_id = get_or(item_json, "serviceId", "unknown-service");
+  let fallback = get_or(item_json, "displayName", service_id);
+  let agent_id = non_empty_or(get_nested_or(item_json, "agent.agentId", ""), fallback);
+  let name = non_empty_or(get_nested_or(item_json, "agent.name", ""), fallback);
+  {
+    serviceId: service_id,
+    agentId: agent_id,
+    displayName: name
+  }
+}
+
+function list_contains_i64(values: List<Int64>, target: Int64) -> Bool {
+  match is_empty(values) {
+    True -> False,
+    False -> match head(values) == target {
+      True -> True,
+      False -> list_contains_i64(tail(values), target)
+    }
+  }
+}
+
+function remove_i64(values: List<Int64>, target: Int64, acc: List<Int64>) -> List<Int64> {
+  match is_empty(values) {
+    True -> acc,
+    False -> {
+      let h = head(values);
+      let next = match h == target {
+        True -> acc,
+        False -> append(acc, h)
+      };
+      remove_i64(tail(values), target, next)
+    }
+  }
+}
+
+function toggle_i64(values: List<Int64>, target: Int64) -> List<Int64> {
+  match list_contains_i64(values, target) {
+    True -> remove_i64(values, target, []),
+    False -> append(values, target)
+  }
+}
+
+function append_range(idx: Int64, count: Int64, acc: List<Int64>) -> List<Int64> {
+  match idx >= count {
+    True -> acc,
+    False -> append_range(idx + 1, count, append(acc, idx))
+  }
+}
+
+function list_len<T>(values: List<T>) -> Int64 {
+  match is_empty(values) {
+    True -> 0,
+    False -> 1 + list_len(tail(values))
+  }
+}
+
+function sort_i64(values: List<Int64>) -> List<Int64> {
+  values
+}
+
+effect[Network] function request_full_checked(method: String, url: String, headers_json: String, body: String) -> Result<String, String> {
+  match http_request_full(method, url, headers_json, body) {
+    Err(msg) -> Err(msg),
+    Ok(payload) -> {
+      let status_text = get_or(payload, "status", "0");
+      let response_body = get_or(payload, "body", "");
+      match string_to_int(status_text) {
+        None -> Err(method ++ " " ++ url ++ " returned malformed status"),
+        Some(status) -> match is_http_success(status) {
+          True -> Ok(response_body),
+          False -> Err(method ++ " " ++ url ++ " failed (" ++ status_text ++ "): " ++ response_body)
+        }
+      }
+    }
+  }
+}
+
+function registry_url(base: String) -> String {
+  base ++ "/api/agents/registry"
+}
+
+function run_events_url(base: String, run_id: String) -> String {
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events?limit=200"
+}
+
+function run_messages_url(base: String, run_id: String) -> String {
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/messages"
+}
+
+function agents_events_url(base: String) -> String {
+  base ++ "/api/agents/events"
+}
+
+effect[Time, Random] function create_run_id() -> String {
+  "run_cli_" ++ int_to_string(timestamp_to_int(now())) ++ "_" ++ int_to_string(random_int(1000, 999999))
+}
+
+function trigger_context_json(run_id: String) -> String {
+  "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":" ++ quote_json(run_id) ++ ",\"caller\":\"claritycli\"}"
+}
+
+function run_created_payload(service_id: String, agent: String, run_id: String) -> String {
+  let ctx = trigger_context_json(run_id);
+  "{"
+    ++ "\"kind\":\"agent.run_created\","
+    ++ "\"level\":\"info\","
+    ++ "\"message\":" ++ quote_json("agent.run_created (" ++ run_id ++ ")") ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
+    ++ "\"data\":{"
+      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
+      ++ "\"trigger\":\"api\","
+      ++ "\"triggerContext\":" ++ ctx ++ ","
+      ++ "\"route\":\"/cli/runtime-chat\","
+      ++ "\"method\":\"CLI\","
+      ++ "\"requestId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"caller\":\"claritycli\""
+    ++ "}"
+  ++ "}"
+}
+
+function run_started_payload(service_id: String, agent: String, run_id: String) -> String {
+  let ctx = trigger_context_json(run_id);
+  "{"
+    ++ "\"kind\":\"agent.run_started\","
+    ++ "\"level\":\"info\","
+    ++ "\"message\":" ++ quote_json("agent.run_started (" ++ run_id ++ ")") ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
+    ++ "\"data\":{"
+      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
+      ++ "\"trigger\":\"api\","
+      ++ "\"triggerContext\":" ++ ctx
+    ++ "}"
+  ++ "}"
+}
+
+function user_message_payload(service_id: String, agent: String, message: String) -> String {
+  "{"
+    ++ "\"message\":" ++ quote_json(message) ++ ","
+    ++ "\"role\":\"user\","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent)
+  ++ "}"
+}
+
+function is_terminal_event(kind: String) -> Bool {
+  kind == "agent.run_completed" or kind == "agent.run_failed" or kind == "agent.run_cancelled"
+}
+
+function event_message(event_json: String) -> String {
+  let a = get_nested_or(event_json, "data.message", "");
+  match string_length(a) > 0 {
+    True -> a,
+    False -> {
+      let b = get_nested_or(event_json, "data.text", "");
+      match string_length(b) > 0 {
+        True -> b,
+        False -> get_or(event_json, "message", "")
+      }
+    }
+  }
+}
+
+effect[Network] function fetch_registry(runtime_url: String, token: String) -> Result<String, String> {
+  request_full_checked("GET", registry_url(runtime_url), auth_headers(token), "")
+}
+
+effect[Network] function bootstrap_run(runtime_url: String, token: String, participant: Participant) -> Result<String, String> {
+  match request_full_checked(
+    "POST",
+    agents_events_url(runtime_url),
+    json_headers(token),
+    run_created_payload(participant.serviceId, participant.agentId, participant.runId)
+  ) {
+    Err(msg) -> Err(msg),
+    Ok(_) -> request_full_checked(
+      "POST",
+      agents_events_url(runtime_url),
+      json_headers(token),
+      run_started_payload(participant.serviceId, participant.agentId, participant.runId)
+    )
+  }
+}
+
+effect[Network] function send_user_message(runtime_url: String, token: String, participant: Participant, message: String) -> Result<String, String> {
+  request_full_checked(
+    "POST",
+    run_messages_url(runtime_url, participant.runId),
+    json_headers(token),
+    user_message_payload(participant.serviceId, participant.agentId, message)
+  )
+}
+
+effect[Network] function fetch_events(runtime_url: String, token: String, run_id: String) -> Result<String, String> {
+  request_full_checked("GET", run_events_url(runtime_url, run_id), auth_headers(token), "")
+}
+
+function scan_events(items_json: String, idx: Int64, scan: TurnScan) -> TurnScan {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> scan,
+    False -> {
+      let next_scan = match arr_get(items_json, idx) {
+        None -> scan,
+        Some(event_json) -> {
+          let seq = parse_int_or(get_or(event_json, "seq", "0"), 0);
+          match seq <= scan.nextSeq {
+            True -> scan,
+            False -> {
+              let kind = get_or(event_json, "kind", "");
+              let msg = event_message(event_json);
+              {
+                nextSeq: seq,
+                assistantMessage: match kind == "agent.chat.assistant_message" and string_length(msg) > 0 {
+                  True -> msg,
+                  False -> scan.assistantMessage
+                },
+                stepCompletedMessage: match kind == "agent.step_completed" and string_length(msg) > 0 {
+                  True -> msg,
+                  False -> scan.stepCompletedMessage
+                },
+                terminalKind: match is_terminal_event(kind) {
+                  True -> kind,
+                  False -> scan.terminalKind
+                }
+              }
+            }
+          }
+        }
+      };
+      scan_events(items_json, idx + 1, next_scan)
+    }
+  }
+}
+
+type ReplyResult = {
+  participant: Participant,
+  message: String,
+  hasMessage: Bool
+}
+
+effect[Network, Time] function wait_for_single_reply(runtime_url: String, token: String, participant: Participant, deadline_ms: Int64) -> ReplyResult {
+  match timestamp_to_int(now()) >= deadline_ms {
+    True -> { participant: participant, message: "[no response yet]", hasMessage: True },
+    False -> match fetch_events(runtime_url, token, participant.runId) {
+      Err(msg) -> {
+        sleep(400);
+        wait_for_single_reply(runtime_url, token, participant, deadline_ms)
+      },
+      Ok(items_json) -> {
+        let scan = scan_events(items_json, 0, {
+          nextSeq: participant.lastSeq,
+          assistantMessage: "",
+          stepCompletedMessage: "",
+          terminalKind: ""
+        });
+        let updated = {
+          alias: participant.alias,
+          serviceId: participant.serviceId,
+          agentId: participant.agentId,
+          displayName: participant.displayName,
+          runId: participant.runId,
+          lastSeq: scan.nextSeq,
+          terminal: participant.terminal or string_length(scan.terminalKind) > 0
+        };
+        let terminal_message = match string_length(scan.terminalKind) > 0 {
+          True -> "[" ++ scan.terminalKind ++ "]",
+          False -> ""
+        };
+        let chosen = match string_length(scan.assistantMessage) > 0 {
+          True -> scan.assistantMessage,
+          False -> match string_length(scan.stepCompletedMessage) > 0 {
+            True -> scan.stepCompletedMessage,
+            False -> terminal_message
+          }
+        };
+        match string_length(chosen) > 0 {
+          True -> { participant: updated, message: chosen, hasMessage: True },
+          False -> {
+            sleep(400);
+            wait_for_single_reply(runtime_url, token, updated, deadline_ms)
+          }
+        }
+      }
+    }
+  }
+}
+
+function participant_at(participants: List<Participant>, idx: Int64, current: Int64) -> Option<Participant> {
+  match is_empty(participants) {
+    True -> None,
+    False -> match current == idx {
+      True -> Some(head(participants)),
+      False -> participant_at(tail(participants), idx, current + 1)
+    }
+  }
+}
+
+function replace_participant_at(
+  participants: List<Participant>,
+  idx: Int64,
+  current: Int64,
+  updated: Participant,
+  acc: List<Participant>
+) -> List<Participant> {
+  match is_empty(participants) {
+    True -> acc,
+    False -> {
+      let next = match current == idx {
+        True -> append(acc, updated),
+        False -> append(acc, head(participants))
+      };
+      replace_participant_at(tail(participants), idx, current + 1, updated, next)
+    }
+  }
+}
+
+function find_participant_index(participants: List<Participant>, alias: String, idx: Int64) -> Int64 {
+  match is_empty(participants) {
+    True -> -1,
+    False -> match head(participants).alias == alias {
+      True -> idx,
+      False -> find_participant_index(tail(participants), alias, idx + 1)
+    }
+  }
+}
+
+function append_history(history: List<HistoryRow>, speaker: String, text: String) -> List<HistoryRow> {
+  append(history, { speaker: speaker, text: text })
+}
+
+effect[Network, Log, Time] function send_to_index(
+  runtime_url: String,
+  token: String,
+  participants: List<Participant>,
+  history: List<HistoryRow>,
+  idx: Int64,
+  text: String,
+  is_discuss: Bool
+) -> ChatState {
+  match participant_at(participants, idx, 0) {
+    None -> { participants: participants, history: history },
+    Some(participant) -> match participant.terminal {
+      True -> {
+        print_string(participant.alias ++ "> [run already terminal]");
+        { participants: participants, history: history }
+      },
+      False -> {
+        let history_after_user = match is_discuss {
+          True -> history,
+          False -> {
+            print_string("you> @" ++ participant.alias ++ " " ++ text);
+            append_history(history, "you", "@" ++ participant.alias ++ " " ++ text)
+          }
+        };
+        match is_discuss {
+          True -> print_string("system> discuss turn for " ++ participant.alias),
+          False -> noop_cliui()
+        };
+        match send_user_message(runtime_url, token, participant, text) {
+          Err(msg) -> {
+            print_string("send error: " ++ msg);
+            { participants: participants, history: history_after_user }
+          },
+          Ok(_) -> {
+            let reply = wait_for_single_reply(runtime_url, token, participant, timestamp_to_int(now()) + 20000);
+            print_string(participant.alias ++ "> " ++ reply.message);
+            {
+              participants: replace_participant_at(participants, idx, 0, reply.participant, []),
+              history: append_history(history_after_user, participant.alias, reply.message)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function drop_first<T>(values: List<T>, n: Int64) -> List<T> {
+  match n <= 0 or is_empty(values) {
+    True -> values,
+    False -> drop_first(tail(values), n - 1)
+  }
+}
+
+function format_history_rows(rows: List<HistoryRow>, acc: String) -> String {
+  match is_empty(rows) {
+    True -> acc,
+    False -> {
+      let line = head(rows).speaker ++ ": " ++ head(rows).text;
+      let next = match string_length(acc) == 0 {
+        True -> line,
+        False -> acc ++ "\n" ++ line
+      };
+      format_history_rows(tail(rows), next)
+    }
+  }
+}
+
+function format_transcript(history: List<HistoryRow>) -> String {
+  let count = list_len(history);
+  let start = match count > 10 {
+    True -> count - 10,
+    False -> 0
+  };
+  let tail_rows = drop_first(history, start);
+  match string_length(format_history_rows(tail_rows, "")) > 0 {
+    True -> format_history_rows(tail_rows, ""),
+    False -> "(no transcript yet)"
+  }
+}
+
+function aliases_except(participants: List<Participant>, except_alias: String, acc: String) -> String {
+  match is_empty(participants) {
+    True -> acc,
+    False -> {
+      let p = head(participants);
+      let next = match p.alias == except_alias {
+        True -> acc,
+        False -> match string_length(acc) == 0 {
+          True -> p.alias,
+          False -> acc ++ ", " ++ p.alias
+        }
+      };
+      aliases_except(tail(participants), except_alias, next)
+    }
+  }
+}
+
+function parse_turns(input: String) -> Int64 {
+  let trimmed = trim(input);
+  let rest = match string_starts_with(trimmed, "/discuss") {
+    True -> trim(substring(trimmed, string_length("/discuss"), string_length(trimmed) - string_length("/discuss"))),
+    False -> trim(substring(trimmed, string_length("discuss"), string_length(trimmed) - string_length("discuss")))
+  };
+  let n = parse_int_or(rest, 6);
+  clamp(2, 20, n)
+}
+
+effect[Network, Log, Time] function discuss_loop(
+  runtime_url: String,
+  token: String,
+  turns: Int64,
+  turn_idx: Int64,
+  state: ChatState
+) -> ChatState {
+  let count = list_len(state.participants);
+  match turn_idx >= turns {
+    True -> state,
+    False -> {
+      let idx = turn_idx % count;
+      match participant_at(state.participants, idx, 0) {
+        None -> discuss_loop(runtime_url, token, turns, turn_idx + 1, state),
+        Some(speaker) -> {
+          let prompt =
+            "You are in a multi-agent collaboration room.\n"
+            ++ "Your alias: " ++ speaker.alias ++ ".\n"
+            ++ "Other aliases: " ++ aliases_except(state.participants, speaker.alias, "") ++ ".\n"
+            ++ "Discuss the solution and move toward a concrete shared conclusion.\n"
+            ++ "Respond with one concise message (max 4 sentences).\n"
+            ++ "Recent transcript:\n"
+            ++ format_transcript(state.history);
+          let sent = send_to_index(runtime_url, token, state.participants, state.history, idx, prompt, True);
+          discuss_loop(runtime_url, token, turns, turn_idx + 1, {
+            participants: sent.participants,
+            history: sent.history
+          })
+        }
+      }
+    }
+  }
+}
+
+function char_is_alias_safe(ch: String) -> Bool {
+  contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", ch)
+}
+
+function sanitize_alias_chars(raw: String, idx: Int64, acc: String) -> String {
+  match idx >= string_length(raw) {
+    True -> acc,
+    False -> {
+      let ch = char_at(raw, idx);
+      let next = match char_is_alias_safe(ch) {
+        True -> acc ++ ch,
+        False -> acc ++ "-"
+      };
+      sanitize_alias_chars(raw, idx + 1, next)
+    }
+  }
+}
+
+function alias_base(raw: String, fallback: String) -> String {
+  let lowered = to_lowercase(trim(raw));
+  let candidate = sanitize_alias_chars(lowered, 0, "");
+  let trimmed_len = match string_length(candidate) > 24 {
+    True -> 24,
+    False -> string_length(candidate)
+  };
+  let shortened = substring(candidate, 0, trimmed_len);
+  match string_length(trim(shortened)) > 0 {
+    True -> shortened,
+    False -> fallback
+  }
+}
+
+function alias_exists(participants: List<Participant>, alias: String) -> Bool {
+  match is_empty(participants) {
+    True -> False,
+    False -> match head(participants).alias == alias {
+      True -> True,
+      False -> alias_exists(tail(participants), alias)
+    }
+  }
+}
+
+function ensure_unique_alias(candidate: String, participants: List<Participant>, suffix: Int64) -> String {
+  let alias = match suffix <= 1 {
+    True -> candidate,
+    False -> candidate ++ "-" ++ int_to_string(suffix)
+  };
+  match alias_exists(participants, alias) {
+    True -> ensure_unique_alias(candidate, participants, suffix + 1),
+    False -> alias
+  }
+}
+
+effect[FileSystem, Log] function prompt_line(prompt: String) -> String {
+  print_string(prompt);
+  trim(read_line())
+}
+
+effect[FileSystem, Log] function assign_aliases(
+  choices: List<AgentChoice>,
+  acc: List<Participant>
+) -> List<Participant> {
+  match is_empty(choices) {
+    True -> acc,
+    False -> {
+      let choice = head(choices);
+      let fallback = alias_base(choice.displayName, "bot");
+      let default_alias = ensure_unique_alias(fallback, acc, 1);
+      let answer = prompt_line("Alias for " ++ choice.displayName ++ " [" ++ default_alias ++ "]: ");
+      let candidate = alias_base(answer, default_alias);
+      let alias = ensure_unique_alias(candidate, acc, 1);
+      assign_aliases(
+        tail(choices),
+        append(acc, {
+          alias: alias,
+          serviceId: choice.serviceId,
+          agentId: choice.agentId,
+          displayName: choice.displayName,
+          runId: "",
+          lastSeq: 0,
+          terminal: False
+        })
+      )
+    }
+  }
+}
+
+effect[Network, Time, Random, Log] function bootstrap_all(
+  runtime_url: String,
+  token: String,
+  participants: List<Participant>,
+  acc: List<Participant>
+) -> List<Participant> {
+  match is_empty(participants) {
+    True -> acc,
+    False -> {
+      let p = head(participants);
+      let with_run = {
+        alias: p.alias,
+        serviceId: p.serviceId,
+        agentId: p.agentId,
+        displayName: p.displayName,
+        runId: create_run_id(),
+        lastSeq: 0,
+        terminal: False
+      };
+      match bootstrap_run(runtime_url, token, with_run) {
+        Err(msg) -> {
+          print_string("bootstrap error for " ++ with_run.alias ++ ": " ++ msg);
+          bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
+        },
+        Ok(_) -> bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
+      }
+    }
+  }
+}
+
+effect[Log] function print_agent_rows(items_json: String, idx: Int64) -> Unit {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> noop_cliui(),
+    False -> {
+      match arr_get(items_json, idx) {
+        None -> print_string("  " ++ int_to_string(idx + 1) ++ ". <invalid entry>"),
+        Some(item_json) -> print_string("  " ++ int_to_string(idx + 1) ++ ". " ++ display_agent(item_json))
+      };
+      print_agent_rows(items_json, idx + 1)
+    }
+  }
+}
+
+effect[TTY] function clear_rendered_lines(n: Int64) -> Unit {
+  match n <= 0 {
+    True -> noop_cliui(),
+    False -> {
+      tty_cursor_up(1);
+      tty_clear_line();
+      clear_rendered_lines(n - 1)
+    }
+  }
+}
+
+effect[Log] function render_selection_menu(runtime_url: String, items_json: String, idx: Int64, selected: List<Int64>, line_no: Int64) -> Int64 {
+  let count = arr_len(items_json);
+  match line_no == 0 {
+    True -> {
+      print_string("Connected to " ++ runtime_url);
+      print_string("Invite bots (up/down move, space toggle, enter confirm, a toggle all):");
+      print_string("");
+      render_selection_menu(runtime_url, items_json, idx, selected, 1)
+    },
+    False -> {
+      let item_idx = line_no - 1;
+      match item_idx < count {
+        True -> {
+          let row = match arr_get(items_json, item_idx) {
+            None -> "<invalid entry>",
+            Some(item_json) -> display_agent(item_json)
+          };
+          let cursor = match item_idx == idx {
+            True -> ">",
+            False -> " "
+          };
+          let mark = match list_contains_i64(selected, item_idx) {
+            True -> "[x]",
+            False -> "[ ]"
+          };
+          print_string(cursor ++ " " ++ mark ++ " " ++ row);
+          render_selection_menu(runtime_url, items_json, idx, selected, line_no + 1)
+        },
+        False -> {
+          print_string("");
+          count + 4
+        }
+      }
+    }
+  }
+}
+
+effect[TTY, Log] function select_indices_tty(
+  runtime_url: String,
+  items_json: String,
+  count: Int64,
+  idx: Int64,
+  selected: List<Int64>,
+  rendered: Int64
+) -> List<Int64> {
+  match rendered > 0 {
+    True -> clear_rendered_lines(rendered),
+    False -> noop_cliui()
+  };
+  let next_rendered = render_selection_menu(runtime_url, items_json, idx, selected, 0);
+  match tty_read_key(1000) {
+    None -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered),
+    Some(key) -> match key == "up" {
+      True -> select_indices_tty(runtime_url, items_json, count, (idx - 1 + count) % count, selected, next_rendered),
+      False -> match key == "down" {
+        True -> select_indices_tty(runtime_url, items_json, count, (idx + 1) % count, selected, next_rendered),
+        False -> match key == "space" {
+          True -> select_indices_tty(runtime_url, items_json, count, idx, toggle_i64(selected, idx), next_rendered),
+          False -> match key == "a" or key == "A" {
+            True -> {
+              let next_selected = match list_len(selected) == count {
+                True -> [],
+                False -> append_range(0, count, [])
+              };
+              select_indices_tty(runtime_url, items_json, count, idx, next_selected, next_rendered)
+            },
+            False -> match key == "enter" {
+              True -> {
+                clear_rendered_lines(next_rendered);
+                let final_selected = match is_empty(selected) {
+                  True -> [idx],
+                  False -> selected
+                };
+                sort_i64(final_selected)
+              },
+              False -> match key == "escape" or key == "ctrl+c" or key == "ctrl+d" {
+                True -> {
+                  clear_rendered_lines(next_rendered);
+                  []
+                },
+                False -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function parse_selection_parts(parts: List<String>, count: Int64, acc: List<Int64>) -> List<Int64> {
+  match is_empty(parts) {
+    True -> sort_i64(acc),
+    False -> {
+      let token = trim(head(parts));
+      let next = match string_to_int(token) {
+        None -> acc,
+        Some(n) -> {
+          let idx = n - 1;
+          match idx >= 0 and idx < count and bool_not(list_contains_i64(acc, idx)) {
+            True -> append(acc, idx),
+            False -> acc
+          }
+        }
+      };
+      parse_selection_parts(tail(parts), count, next)
+    }
+  }
+}
+
+effect[FileSystem, Log] function select_indices_prompt(items_json: String) -> List<Int64> {
+  let count = arr_len(items_json);
+  print_agent_rows(items_json, 0);
+  let raw = prompt_line("Select bot numbers (comma-separated, default 1): ");
+  let selected = match string_length(trim(raw)) == 0 {
+    True -> [0],
+    False -> parse_selection_parts(split(raw, ","), count, [])
+  };
+  match is_empty(selected) {
+    True -> {
+      print_string("No valid selections. Defaulting to 1.");
+      [0]
+    },
+    False -> selected
+  }
+}
+
+effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_json: String) -> List<Int64> {
+  let count = arr_len(items_json);
+  match count <= 0 {
+    True -> [],
+    False -> match tty_is_tty() {
+      False -> select_indices_prompt(items_json),
+      True -> {
+        tty_enter_raw();
+        tty_hide_cursor();
+        let selected = select_indices_tty(runtime_url, items_json, count, 0, [], 0);
+        tty_show_cursor();
+        tty_exit_raw();
+        selected
+      }
+    }
+  }
+}
+
+function choices_from_indices(items_json: String, indices: List<Int64>, acc: List<AgentChoice>) -> List<AgentChoice> {
+  match is_empty(indices) {
+    True -> acc,
+    False -> {
+      let next_acc = match arr_get(items_json, head(indices)) {
+        None -> acc,
+        Some(item_json) -> append(acc, extract_agent(item_json))
+      };
+      choices_from_indices(items_json, tail(indices), next_acc)
+    }
+  }
+}
+
+effect[Log] function print_participants(participants: List<Participant>) -> Unit {
+  match is_empty(participants) {
+    True -> noop_cliui(),
+    False -> {
+      let p = head(participants);
+      print_string("- " ++ p.alias ++ ": " ++ p.displayName ++ " (" ++ p.serviceId ++ ")");
+      print_participants(tail(participants))
+    }
+  }
+}
+
+effect[Log] function print_status(participants: List<Participant>) -> Unit {
+  match is_empty(participants) {
+    True -> noop_cliui(),
+    False -> {
+      let p = head(participants);
+      print_string("run> " ++ p.alias ++ " service=" ++ p.serviceId ++ " run=" ++ p.runId ++ " terminal=" ++ bool_to_string(p.terminal));
+      print_status(tail(participants))
+    }
+  }
+}
+
+function bool_to_string(value: Bool) -> String {
+  match value {
+    True -> "true",
+    False -> "false"
+  }
+}
+
+function is_alias_valid(alias: String, idx: Int64) -> Bool {
+  match idx >= string_length(alias) {
+    True -> True,
+    False -> match char_is_alias_safe(char_at(alias, idx)) {
+      True -> is_alias_valid(alias, idx + 1),
+      False -> False
+    }
+  }
+}
+
+type RenameParse = {
+  ok: Bool,
+  oldAlias: String,
+  newAlias: String
+}
+
+function parse_rename(input: String) -> RenameParse {
+  let prefix = "/rename ";
+  match string_starts_with(input, prefix) {
+    False -> { ok: False, oldAlias: "", newAlias: "" },
+    True -> {
+      let rest = trim(substring(input, string_length(prefix), string_length(input) - string_length(prefix)));
+      let split_idx = index_of(rest, " ");
+      match split_idx < 0 {
+        True -> { ok: False, oldAlias: "", newAlias: "" },
+        False -> {
+          let old_alias = trim(substring(rest, 0, split_idx));
+          let new_alias = trim(substring(rest, split_idx + 1, string_length(rest) - (split_idx + 1)));
+          match string_length(old_alias) > 0 and string_length(new_alias) > 0 {
+            True -> { ok: True, oldAlias: old_alias, newAlias: new_alias },
+            False -> { ok: False, oldAlias: "", newAlias: "" }
+          }
+        }
+      }
+    }
+  }
+}
+
+function rename_alias(
+  participants: List<Participant>,
+  old_alias: String,
+  new_alias: String,
+  idx: Int64,
+  acc: List<Participant>
+) -> Result<List<Participant>, String> {
+  let len = string_length(new_alias);
+  match len <= 0 or len > 24 or bool_not(is_alias_valid(new_alias, 0)) {
+    True -> Err("Invalid alias. Use 1-24 chars [a-zA-Z0-9_-]."),
+    False -> match alias_exists(participants, new_alias) {
+      True -> Err("Alias already exists."),
+      False -> rename_alias_impl(participants, old_alias, new_alias, idx, acc, False)
+    }
+  }
+}
+
+function rename_alias_impl(
+  participants: List<Participant>,
+  old_alias: String,
+  new_alias: String,
+  idx: Int64,
+  acc: List<Participant>,
+  found: Bool
+) -> Result<List<Participant>, String> {
+  match is_empty(participants) {
+    True -> match found {
+      True -> Ok(acc),
+      False -> Err("Unknown alias.")
+    },
+    False -> {
+      let p = head(participants);
+      let updated = match p.alias == old_alias {
+        True -> {
+          alias: new_alias,
+          serviceId: p.serviceId,
+          agentId: p.agentId,
+          displayName: p.displayName,
+          runId: p.runId,
+          lastSeq: p.lastSeq,
+          terminal: p.terminal
+        },
+        False -> p
+      };
+      let next_found = found or p.alias == old_alias;
+      rename_alias_impl(tail(participants), old_alias, new_alias, idx + 1, append(acc, updated), next_found)
+    }
+  }
+}
+
+type TargetParse = {
+  ok: Bool,
+  alias: String,
+  text: String
+}
+
+function parse_target_to(input: String) -> TargetParse {
+  let prefix = "/to ";
+  match string_starts_with(input, prefix) {
+    False -> { ok: False, alias: "", text: "" },
+    True -> {
+      let rest = trim(substring(input, string_length(prefix), string_length(input) - string_length(prefix)));
+      let split_idx = index_of(rest, " ");
+      match split_idx < 0 {
+        True -> { ok: False, alias: "", text: "" },
+        False -> {
+          let alias = trim(substring(rest, 0, split_idx));
+          let text = trim(substring(rest, split_idx + 1, string_length(rest) - (split_idx + 1)));
+          match string_length(alias) > 0 and string_length(text) > 0 {
+            True -> { ok: True, alias: alias, text: text },
+            False -> { ok: False, alias: "", text: "" }
+          }
+        }
+      }
+    }
+  }
+}
+
+function parse_target_at(input: String) -> TargetParse {
+  match string_starts_with(input, "@") {
+    False -> { ok: False, alias: "", text: "" },
+    True -> {
+      let rest = substring(input, 1, string_length(input) - 1);
+      let split_idx = index_of(rest, " ");
+      match split_idx < 0 {
+        True -> { ok: False, alias: "", text: "" },
+        False -> {
+          let alias = trim(substring(rest, 0, split_idx));
+          let text = trim(substring(rest, split_idx + 1, string_length(rest) - (split_idx + 1)));
+          match string_length(alias) > 0 and string_length(text) > 0 {
+            True -> { ok: True, alias: alias, text: text },
+            False -> { ok: False, alias: "", text: "" }
+          }
+        }
+      }
+    }
+  }
+}
+
+function parse_broadcast(input: String) -> Result<String, String> {
+  let prefix = "/broadcast ";
+  match string_starts_with(input, prefix) {
+    False -> Err("not-broadcast"),
+    True -> {
+      let text = trim(substring(input, string_length(prefix), string_length(input) - string_length(prefix)));
+      match string_length(text) > 0 {
+        True -> Ok(text),
+        False -> Err("empty")
+      }
+    }
+  }
+}
+
+effect[Log] function chat_help() -> Unit {
+  print_string("Commands:");
+  print_string("- @alias <text>");
+  print_string("- /to <alias> <text>");
+  print_string("- /broadcast <text>");
+  print_string("- discuss [turns]");
+  print_string("- /rename <old> <new>");
+  print_string("- /agents");
+  print_string("- /status");
+  print_string("- /help");
+  print_string("- /exit");
+}
+
+effect[Network, FileSystem, Log, Time] function broadcast_loop(
+  runtime_url: String,
+  token: String,
+  text: String,
+  participants: List<Participant>,
+  history: List<HistoryRow>,
+  idx: Int64
+) -> ChatState {
+  let count = list_len(participants);
+  match idx >= count {
+    True -> { participants: participants, history: history },
+    False -> {
+      let sent = send_to_index(runtime_url, token, participants, history, idx, text, False);
+      broadcast_loop(runtime_url, token, text, sent.participants, sent.history, idx + 1)
+    }
+  }
+}
+
+effect[Network, FileSystem, Log, Time] function process_chat_input(
+  runtime_url: String,
+  token: String,
+  input: String,
+  state: ChatState
+) -> Result<ChatState, String> {
+  match input == "/help" {
+    True -> {
+      chat_help();
+      Ok(state)
+    },
+    False -> match input == "/agents" {
+      True -> {
+        print_string("Invited bots:");
+        print_participants(state.participants);
+        Ok(state)
+      },
+      False -> match input == "/status" {
+        True -> {
+          print_status(state.participants);
+          Ok(state)
+        },
+        False -> match string_starts_with(input, "/rename ") {
+          True -> {
+            let parsed = parse_rename(input);
+            match parsed.ok {
+              False -> {
+                print_string("Usage: /rename <old> <new>");
+                Ok(state)
+              },
+              True -> match rename_alias(state.participants, parsed.oldAlias, parsed.newAlias, 0, []) {
+                Err(msg) -> {
+                  print_string("system> " ++ msg);
+                  Ok(state)
+                },
+                Ok(updated) -> {
+                  print_string("system> renamed " ++ parsed.oldAlias ++ " -> " ++ parsed.newAlias);
+                  Ok({ participants: updated, history: state.history })
+                }
+              }
+            }
+          },
+          False -> match input == "discuss" or string_starts_with(input, "discuss ") or string_starts_with(input, "/discuss") {
+            True -> {
+              let turns = parse_turns(input);
+              match list_len(state.participants) < 2 {
+                True -> {
+                  print_string("system> discuss needs at least 2 invited bots.");
+                  Ok(state)
+                },
+                False -> {
+                  print_string("system> discuss starting (" ++ int_to_string(turns) ++ " turns)");
+                  let end_state = discuss_loop(runtime_url, token, turns, 0, state);
+                  print_string("system> discuss completed.");
+                  Ok(end_state)
+                }
+              }
+            },
+            False -> {
+              let to_parsed = parse_target_to(input);
+              let at_parsed = parse_target_at(input);
+              let broadcast_parsed = parse_broadcast(input);
+
+              match to_parsed.ok or at_parsed.ok {
+                True -> {
+                  let alias = match to_parsed.ok {
+                    True -> to_parsed.alias,
+                    False -> at_parsed.alias
+                  };
+                  let text = match to_parsed.ok {
+                    True -> to_parsed.text,
+                    False -> at_parsed.text
+                  };
+                  let idx = find_participant_index(state.participants, alias, 0);
+                  match idx < 0 {
+                    True -> {
+                      print_string("system> unknown alias '" ++ alias ++ "'. Use /agents.");
+                      Ok(state)
+                    },
+                    False -> {
+                      let sent = send_to_index(runtime_url, token, state.participants, state.history, idx, text, False);
+                      Ok({ participants: sent.participants, history: sent.history })
+                    }
+                  }
+                },
+                False -> match broadcast_parsed {
+                  Ok(text) -> {
+                    let sent = broadcast_loop(runtime_url, token, text, state.participants, state.history, 0);
+                    Ok({ participants: sent.participants, history: sent.history })
+                  },
+                  Err(_) -> match list_len(state.participants) == 1 {
+                    True -> {
+                      let sent = send_to_index(runtime_url, token, state.participants, state.history, 0, input, False);
+                      Ok({ participants: sent.participants, history: sent.history })
+                    },
+                    False -> {
+                      print_string("system> multiple bots invited. Use @alias <text>, /to <alias> <text>, or /broadcast <text>.");
+                      Ok(state)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+effect[Network, FileSystem, Log, Time] function chat_loop(runtime_url: String, token: String, state: ChatState) -> Unit {
+  print_string("you> ");
+  let input = trim(read_line());
+  match string_length(input) == 0 {
+    True -> chat_loop(runtime_url, token, state),
+    False -> match input == "/exit" or input == "/quit" {
+      True -> noop_cliui(),
+      False -> match process_chat_input(runtime_url, token, input, state) {
+        Err(_) -> chat_loop(runtime_url, token, state),
+        Ok(next) -> chat_loop(runtime_url, token, next)
+      }
+    }
+  }
+}
+
+effect[Log] function usage() -> Unit {
+  print_string("claritycli [runtime-url] [--token <secret>]");
+  print_string("");
+  print_string("Flow:");
+  print_string("1. Connects to runtime (default http://localhost:4707)");
+  print_string("2. Lets you invite one or more bots (up/down + space + enter)");
+  print_string("3. Lets you name each bot with easy aliases (e.g. coder, ux)");
+  print_string("4. Starts chat room with targeted messaging and discuss mode");
+  print_string("");
+  print_string("Chat commands:");
+  print_string("- @alias <text>         Send to one bot");
+  print_string("- /to <alias> <text>    Send to one bot");
+  print_string("- /broadcast <text>     Send to all invited bots");
+  print_string("- discuss [turns]       Let bots discuss (default 6 turns)");
+  print_string("- /rename <old> <new>   Rename bot alias");
+  print_string("- /agents               Show invited bots");
+  print_string("- /status               Show run ids");
+  print_string("- /help                 Show help");
+  print_string("- /exit                 Exit");
+}
+
+effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> Unit {
+  let args = get_args();
+  match has_flag(args, "help") or has_flag(args, "h") {
+    True -> usage(),
+    False -> {
+      let runtime_arg = opt_str(positional(args, 0), "");
+      let runtime_url = normalize_runtime_url(runtime_arg);
+      let token_flag = trim(flag_or(args, "token", ""));
+      let token = match string_length(token_flag) > 0 {
+        True -> token_flag,
+        False -> match get_secret("CLARITY_RUNTIME_TOKEN") {
+          Some(v) -> trim(v),
+          None -> ""
+        }
+      };
+
+      match fetch_registry(runtime_url, token) {
+        Err(msg) -> {
+          print_string(msg);
+          exit(1)
+        },
+        Ok(body) -> {
+          let items_json = get_or(body, "items", "[]");
+          let count = arr_len(items_json);
+          match count <= 0 {
+            True -> {
+              print_string("No agents found at " ++ runtime_url);
+              exit(1)
+            },
+            False -> {
+              let selected_indices = select_indices(runtime_url, items_json);
+              match is_empty(selected_indices) {
+                True -> {
+                  print_string("Selection cancelled.");
+                  exit(1)
+                },
+                False -> {
+                  let selected_choices = choices_from_indices(items_json, selected_indices, []);
+                  let aliased = assign_aliases(selected_choices, []);
+                  let participants = bootstrap_all(runtime_url, token, aliased, []);
+                  print_string("Invited bots:");
+                  print_participants(participants);
+                  chat_help();
+                  chat_loop(runtime_url, token, { participants: participants, history: [] })
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

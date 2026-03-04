@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 const cliPath = path.resolve("dist/clarity-agent.cjs");
-const clarityUiPath = path.resolve("bin/claritycli.cjs");
+const clarityUiPath = path.resolve("dist/claritycli.cjs");
 
 async function waitFor(check, timeoutMs = 5000, intervalMs = 25) {
   const started = Date.now();
