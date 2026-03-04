@@ -247,7 +247,7 @@ function trigger_context_json(run_id: String) -> String {
   "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":" ++ quote_json(run_id) ++ ",\"caller\":\"claritycli\"}"
 }
 
-function run_created_payload(service_id: String, agent: String, run_id: String) -> String {
+function run_created_payload(service_id: String, agent: String, run_id: String, trigger: String) -> String {
   let ctx = trigger_context_json(run_id);
   "{"
     ++ "\"kind\":\"agent.run_created\","
@@ -260,7 +260,7 @@ function run_created_payload(service_id: String, agent: String, run_id: String) 
       ++ "\"runId\":" ++ quote_json(run_id) ++ ","
       ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
       ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":\"api\","
+      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
       ++ "\"triggerContext\":" ++ ctx ++ ","
       ++ "\"route\":\"/cli/runtime-chat\","
       ++ "\"method\":\"CLI\","
@@ -270,7 +270,7 @@ function run_created_payload(service_id: String, agent: String, run_id: String) 
   ++ "}"
 }
 
-function run_started_payload(service_id: String, agent: String, run_id: String) -> String {
+function run_started_payload(service_id: String, agent: String, run_id: String, trigger: String) -> String {
   let ctx = trigger_context_json(run_id);
   "{"
     ++ "\"kind\":\"agent.run_started\","
@@ -283,7 +283,7 @@ function run_started_payload(service_id: String, agent: String, run_id: String) 
       ++ "\"runId\":" ++ quote_json(run_id) ++ ","
       ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
       ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":\"api\","
+      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
       ++ "\"triggerContext\":" ++ ctx
     ++ "}"
   ++ "}"
@@ -320,20 +320,33 @@ effect[Network] function fetch_registry(runtime_url: String, token: String) -> R
   request_full_checked("GET", registry_url(runtime_url), auth_headers(token), "")
 }
 
-effect[Network] function bootstrap_run(runtime_url: String, token: String, participant: Participant) -> Result<String, String> {
+effect[Network] function bootstrap_with_trigger(runtime_url: String, token: String, participant: Participant, trigger: String) -> Result<String, String> {
   match request_full_checked(
     "POST",
     agents_events_url(runtime_url),
     json_headers(token),
-    run_created_payload(participant.serviceId, participant.agentId, participant.runId)
+    run_created_payload(participant.serviceId, participant.agentId, participant.runId, trigger)
   ) {
     Err(msg) -> Err(msg),
     Ok(_) -> request_full_checked(
       "POST",
       agents_events_url(runtime_url),
       json_headers(token),
-      run_started_payload(participant.serviceId, participant.agentId, participant.runId)
+      run_started_payload(participant.serviceId, participant.agentId, participant.runId, trigger)
     )
+  }
+}
+
+effect[Network] function bootstrap_run(runtime_url: String, token: String, participant: Participant) -> Result<String, String> {
+  match bootstrap_with_trigger(runtime_url, token, participant, "call") {
+    Ok(_) -> Ok("call"),
+    Err(msg_call) -> match bootstrap_with_trigger(runtime_url, token, participant, "api") {
+      Ok(_) -> Ok("api"),
+      Err(msg_api) -> match bootstrap_with_trigger(runtime_url, token, participant, "a2a") {
+        Ok(_) -> Ok("a2a"),
+        Err(msg_a2a) -> Err(msg_call ++ " | " ++ msg_api ++ " | " ++ msg_a2a)
+      }
+    }
   }
 }
 
@@ -735,9 +748,12 @@ effect[Network, Time, Random, Log] function bootstrap_all(
       match bootstrap_run(runtime_url, token, with_run) {
         Err(msg) -> {
           print_string("bootstrap error for " ++ with_run.alias ++ ": " ++ msg);
-          bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
+          bootstrap_all(runtime_url, token, tail(participants), acc)
         },
-        Ok(_) -> bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
+        Ok(trigger) -> {
+          print_string("bootstrap ok for " ++ with_run.alias ++ " (trigger=" ++ trigger ++ ")");
+          bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
+        }
       }
     }
   }
@@ -1270,16 +1286,25 @@ effect[Network, FileSystem, Log, Time] function process_chat_input(
   }
 }
 
-effect[Network, FileSystem, Log, Time] function chat_loop(runtime_url: String, token: String, state: ChatState) -> Unit {
+effect[Network, FileSystem, Log, Time] function chat_loop(runtime_url: String, token: String, state: ChatState, empty_count: Int64) -> Unit {
   print_string("you> ");
   let input = trim(read_line());
   match string_length(input) == 0 {
-    True -> chat_loop(runtime_url, token, state),
+    True -> {
+      let next_empty = empty_count + 1;
+      match next_empty >= 20 {
+        True -> print_string("stdin closed or unavailable; exiting chat."),
+        False -> {
+          sleep(50);
+          chat_loop(runtime_url, token, state, next_empty)
+        }
+      }
+    },
     False -> match input == "/exit" or input == "/quit" {
       True -> noop_cliui(),
       False -> match process_chat_input(runtime_url, token, input, state) {
-        Err(_) -> chat_loop(runtime_url, token, state),
-        Ok(next) -> chat_loop(runtime_url, token, next)
+        Err(_) -> chat_loop(runtime_url, token, state, 0),
+        Ok(next) -> chat_loop(runtime_url, token, next, 0)
       }
     }
   }
@@ -1346,10 +1371,18 @@ effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> U
                   let selected_choices = choices_from_indices(items_json, selected_indices, []);
                   let aliased = assign_aliases(selected_choices, []);
                   let participants = bootstrap_all(runtime_url, token, aliased, []);
-                  print_string("Invited bots:");
-                  print_participants(participants);
-                  chat_help();
-                  chat_loop(runtime_url, token, { participants: participants, history: [] })
+                  match is_empty(participants) {
+                    True -> {
+                      print_string("No agents could be bootstrapped. Check runtime trigger declarations.");
+                      exit(1)
+                    },
+                    False -> {
+                      print_string("Invited bots:");
+                      print_participants(participants);
+                      chat_help();
+                      chat_loop(runtime_url, token, { participants: participants, history: [] }, 0)
+                    }
+                  }
                 }
               }
             }
