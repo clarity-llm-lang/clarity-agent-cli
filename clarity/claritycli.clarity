@@ -532,13 +532,7 @@ effect[Network, Log, Time] function send_to_index(
         { participants: participants, history: history }
       },
       False -> {
-        let history_after_user = match is_discuss {
-          True -> history,
-          False -> {
-            print_string("you> @" ++ participant.alias ++ " " ++ text);
-            append_history(history, "you", "@" ++ participant.alias ++ " " ++ text)
-          }
-        };
+        let history_after_user = history;
         match is_discuss {
           True -> print_string("system> discuss turn for " ++ participant.alias),
           False -> noop_cliui()
@@ -1193,6 +1187,7 @@ function parse_broadcast(input: String) -> Result<String, String> {
 
 effect[Log] function chat_help() -> Unit {
   print_string("Commands:");
+  print_string("- <text> (default broadcast to all invited bots)");
   print_string("- @alias <text>");
   print_string("- /to <alias> <text>");
   print_string("- /broadcast <text>");
@@ -1302,24 +1297,27 @@ effect[Network, FileSystem, Log, Time] function process_chat_input(
                       Ok(state)
                     },
                     False -> {
-                      let sent = send_to_index(runtime_url, token, state.participants, state.history, idx, text, False);
+                      let history_with_user = append_history(state.history, "you", "@" ++ alias ++ " " ++ text);
+                      let sent = send_to_index(runtime_url, token, state.participants, history_with_user, idx, text, False);
                       Ok({ participants: sent.participants, history: sent.history })
                     }
                   }
                 },
                 False -> match broadcast_parsed {
                   Ok(text) -> {
-                    let sent = broadcast_loop(runtime_url, token, text, state.participants, state.history, 0);
+                    let history_with_user = append_history(state.history, "you", text);
+                    let sent = broadcast_loop(runtime_url, token, text, state.participants, history_with_user, 0);
                     Ok({ participants: sent.participants, history: sent.history })
                   },
-                  Err(_) -> match list_len(state.participants) == 1 {
+                  Err(_) -> match string_starts_with(input, "/") {
                     True -> {
-                      let sent = send_to_index(runtime_url, token, state.participants, state.history, 0, input, False);
-                      Ok({ participants: sent.participants, history: sent.history })
+                      print_string("system> unknown command. Use /help.");
+                      Ok(state)
                     },
                     False -> {
-                      print_string("system> multiple bots invited. Use @alias <text>, /to <alias> <text>, or /broadcast <text>.");
-                      Ok(state)
+                      let history_with_user = append_history(state.history, "you", input);
+                      let sent = broadcast_loop(runtime_url, token, input, state.participants, history_with_user, 0);
+                      Ok({ participants: sent.participants, history: sent.history })
                     }
                   }
                 }
@@ -1332,9 +1330,23 @@ effect[Network, FileSystem, Log, Time] function process_chat_input(
   }
 }
 
-effect[Network, FileSystem, Log, Time] function chat_loop(runtime_url: String, token: String, state: ChatState, empty_count: Int64) -> Unit {
-  print_string("you> ");
-  let input = trim(read_line());
+effect[FileSystem, Log, TTY] function prompt_chat_line(prompt: String) -> String {
+  match tty_is_tty() {
+    True -> {
+      print_string(prompt);
+      tty_cursor_up(1);
+      tty_cursor_to_col(string_length(prompt) + 1);
+      trim(read_line())
+    },
+    False -> {
+      print_string(prompt);
+      trim(read_line())
+    }
+  }
+}
+
+effect[Network, FileSystem, Log, Time, TTY] function chat_loop(runtime_url: String, token: String, state: ChatState, empty_count: Int64) -> Unit {
+  let input = prompt_chat_line("you> ");
   match string_length(input) == 0 {
     True -> {
       let next_empty = empty_count + 1;
