@@ -67,6 +67,23 @@ npx clarity-agent serve --port 7842
 npx clarity-agent answer review-step-3 "Looks good"
 ```
 
+## Install direct commands (no npx)
+
+```bash
+npm install
+npm run install:bin
+
+# now callable directly
+claritycli
+clarity-agent --help
+```
+
+Notes:
+
+- By default, commands are linked into `~/.local/bin`.
+- Override install target with `CLARITY_BIN_DIR=/your/bin npm run install:bin`.
+- If needed, add to shell path: `export PATH="$HOME/.local/bin:$PATH"`.
+
 ## CLI commands
 
 ```bash
