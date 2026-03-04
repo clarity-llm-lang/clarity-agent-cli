@@ -7,7 +7,9 @@ import { encode } from "std/url"
 type AgentChoice = {
   serviceId: String,
   agentId: String,
-  displayName: String
+  displayName: String,
+  declaredTriggers: String,
+  supportsApi: Bool
 }
 
 type Participant = {
@@ -150,10 +152,35 @@ function extract_agent(item_json: String) -> AgentChoice {
   let fallback = get_or(item_json, "displayName", service_id);
   let agent_id = non_empty_or(get_nested_or(item_json, "agent.agentId", ""), fallback);
   let name = non_empty_or(get_nested_or(item_json, "agent.name", ""), fallback);
+  let declared_triggers = get_nested_or(item_json, "agent.triggers", "[]");
+  let triggers_lower = to_lowercase(declared_triggers);
+  let supports_api = contains(triggers_lower, "\"api\"") or contains(triggers_lower, "api");
   {
     serviceId: service_id,
     agentId: agent_id,
-    displayName: name
+    displayName: name,
+    declaredTriggers: declared_triggers,
+    supportsApi: supports_api
+  }
+}
+
+function item_supports_api(item_json: String) -> Bool {
+  let declared_triggers = get_nested_or(item_json, "agent.triggers", "[]");
+  let triggers_lower = to_lowercase(declared_triggers);
+  contains(triggers_lower, "\"api\"") or contains(triggers_lower, "api")
+}
+
+function first_api_index(items_json: String, idx: Int64) -> Int64 {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> -1,
+    False -> match arr_get(items_json, idx) {
+      None -> first_api_index(items_json, idx + 1),
+      Some(item_json) -> match item_supports_api(item_json) {
+        True -> idx,
+        False -> first_api_index(items_json, idx + 1)
+      }
+    }
   }
 }
 
@@ -338,16 +365,7 @@ effect[Network] function bootstrap_with_trigger(runtime_url: String, token: Stri
 }
 
 effect[Network] function bootstrap_run(runtime_url: String, token: String, participant: Participant) -> Result<String, String> {
-  match bootstrap_with_trigger(runtime_url, token, participant, "call") {
-    Ok(_) -> Ok("call"),
-    Err(msg_call) -> match bootstrap_with_trigger(runtime_url, token, participant, "api") {
-      Ok(_) -> Ok("api"),
-      Err(msg_api) -> match bootstrap_with_trigger(runtime_url, token, participant, "a2a") {
-        Ok(_) -> Ok("a2a"),
-        Err(msg_a2a) -> Err(msg_call ++ " | " ++ msg_api ++ " | " ++ msg_a2a)
-      }
-    }
-  }
+  bootstrap_with_trigger(runtime_url, token, participant, "api")
 }
 
 effect[Network] function send_user_message(runtime_url: String, token: String, participant: Participant, message: String) -> Result<String, String> {
@@ -726,6 +744,25 @@ effect[FileSystem, Log] function assign_aliases(
   }
 }
 
+effect[Log] function filter_api_choices(
+  choices: List<AgentChoice>,
+  acc: List<AgentChoice>
+) -> List<AgentChoice> {
+  match is_empty(choices) {
+    True -> acc,
+    False -> {
+      let choice = head(choices);
+      match choice.supportsApi {
+        True -> filter_api_choices(tail(choices), append(acc, choice)),
+        False -> {
+          print_string("Skipping " ++ choice.displayName ++ " (" ++ choice.serviceId ++ "): agent does not declare trigger 'api' (declared: " ++ choice.declaredTriggers ++ ")");
+          filter_api_choices(tail(choices), acc)
+        }
+      }
+    }
+  }
+}
+
 effect[Network, Time, Random, Log] function bootstrap_all(
   runtime_url: String,
   token: String,
@@ -750,8 +787,7 @@ effect[Network, Time, Random, Log] function bootstrap_all(
           print_string("bootstrap error for " ++ with_run.alias ++ ": " ++ msg);
           bootstrap_all(runtime_url, token, tail(participants), acc)
         },
-        Ok(trigger) -> {
-          print_string("bootstrap ok for " ++ with_run.alias ++ " (trigger=" ++ trigger ++ ")");
+        Ok(_) -> {
           bootstrap_all(runtime_url, token, tail(participants), append(acc, with_run))
         }
       }
@@ -913,16 +949,21 @@ function parse_selection_parts(parts: List<String>, count: Int64, acc: List<Int6
 
 effect[FileSystem, Log] function select_indices_prompt(items_json: String) -> List<Int64> {
   let count = arr_len(items_json);
+  let default_idx_raw = first_api_index(items_json, 0);
+  let default_idx = match default_idx_raw >= 0 and default_idx_raw < count {
+    True -> default_idx_raw,
+    False -> 0
+  };
   print_agent_rows(items_json, 0);
-  let raw = prompt_line("Select bot numbers (comma-separated, default 1): ");
+  let raw = prompt_line("Select bot numbers (comma-separated, default " ++ int_to_string(default_idx + 1) ++ "): ");
   let selected = match string_length(trim(raw)) == 0 {
-    True -> [0],
+    True -> [default_idx],
     False -> parse_selection_parts(split(raw, ","), count, [])
   };
   match is_empty(selected) {
     True -> {
-      print_string("No valid selections. Defaulting to 1.");
-      [0]
+      print_string("No valid selections. Defaulting to " ++ int_to_string(default_idx + 1) ++ ".");
+      [default_idx]
     },
     False -> selected
   }
@@ -930,6 +971,11 @@ effect[FileSystem, Log] function select_indices_prompt(items_json: String) -> Li
 
 effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_json: String) -> List<Int64> {
   let count = arr_len(items_json);
+  let default_idx_raw = first_api_index(items_json, 0);
+  let default_idx = match default_idx_raw >= 0 and default_idx_raw < count {
+    True -> default_idx_raw,
+    False -> 0
+  };
   match count <= 0 {
     True -> [],
     False -> match tty_is_tty() {
@@ -937,7 +983,7 @@ effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_
       True -> {
         tty_enter_raw();
         tty_hide_cursor();
-        let selected = select_indices_tty(runtime_url, items_json, count, 0, [], 0, True, 0);
+        let selected = select_indices_tty(runtime_url, items_json, count, default_idx, [], 0, True, 0);
         tty_show_cursor();
         tty_exit_raw();
         match list_len(selected) == 1 {
@@ -1368,19 +1414,28 @@ effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> U
                   exit(1)
                 },
                 False -> {
-                  let selected_choices = choices_from_indices(items_json, selected_indices, []);
-                  let aliased = assign_aliases(selected_choices, []);
-                  let participants = bootstrap_all(runtime_url, token, aliased, []);
-                  match is_empty(participants) {
+                  let selected_choices_raw = choices_from_indices(items_json, selected_indices, []);
+                  let selected_choices = filter_api_choices(selected_choices_raw, []);
+                  match is_empty(selected_choices) {
                     True -> {
-                      print_string("No agents could be bootstrapped. Check runtime trigger declarations.");
+                      print_string("No selected agents support runtime chat bootstrap (missing trigger 'api').");
                       exit(1)
                     },
                     False -> {
-                      print_string("Invited bots:");
-                      print_participants(participants);
-                      chat_help();
-                      chat_loop(runtime_url, token, { participants: participants, history: [] }, 0)
+                      let aliased = assign_aliases(selected_choices, []);
+                      let participants = bootstrap_all(runtime_url, token, aliased, []);
+                      match is_empty(participants) {
+                        True -> {
+                          print_string("No agents could be bootstrapped. Check runtime trigger declarations.");
+                          exit(1)
+                        },
+                        False -> {
+                          print_string("Invited bots:");
+                          print_participants(participants);
+                          chat_help();
+                          chat_loop(runtime_url, token, { participants: participants, history: [] }, 0)
+                        }
+                      }
                     }
                   }
                 }
