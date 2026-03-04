@@ -1,0 +1,688 @@
+module HitlServe
+
+import { positional, flag_or, flag_int_or } from "std/cli"
+import { get, get_or, get_nested_or, escape } from "std/json"
+import { decode } from "std/url"
+
+type ServeState = {
+  subscribers: List<Int64>
+}
+
+type QuestionRow = {
+  key: String,
+  safeKey: String,
+  question: String,
+  timestamp: Int64,
+  ageSeconds: Int64,
+  hasPid: Bool,
+  pid: Int64,
+  answered: Bool
+}
+
+type PendingJsonAcc = {
+  acc: String,
+  count: Int64
+}
+
+function noop_serve() -> Unit {}
+
+function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
+  }
+}
+
+function max_i64_local(a: Int64, b: Int64) -> Int64 {
+  match a >= b {
+    True -> a,
+    False -> b
+  }
+}
+
+function normalize_dir(raw: String) -> String {
+  let trimmed = trim(raw);
+  match string_length(trimmed) == 0 {
+    True -> ".clarity-hitl",
+    False -> trimmed
+  }
+}
+
+function path_join(dir: String, file: String) -> String {
+  match string_ends_with(dir, "/") {
+    True -> dir ++ file,
+    False -> dir ++ "/" ++ file
+  }
+}
+
+function question_file_name(safe_key: String) -> String {
+  safe_key ++ ".question"
+}
+
+function answer_file_name(safe_key: String) -> String {
+  safe_key ++ ".answer"
+}
+
+function is_question_file(name: String) -> Bool {
+  string_ends_with(name, ".question")
+}
+
+function question_safe_key(file_name: String) -> String {
+  substring(file_name, 0, string_length(file_name) - string_length(".question"))
+}
+
+function char_is_safe(ch: String) -> Bool {
+  contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-", ch)
+}
+
+function sanitize_key(raw: String, idx: Int64, acc: String) -> String {
+  match idx >= string_length(raw) {
+    True -> acc,
+    False -> {
+      let ch = char_at(raw, idx);
+      let next = match char_is_safe(ch) {
+        True -> acc ++ ch,
+        False -> acc ++ "_"
+      };
+      sanitize_key(raw, idx + 1, next)
+    }
+  }
+}
+
+function to_safe_key(key: String) -> String {
+  let cleaned = sanitize_key(trim(key), 0, "");
+  match string_length(cleaned) > 0 {
+    True -> cleaned,
+    False -> "question"
+  }
+}
+
+function normalize_key(raw: String, fallback: String) -> String {
+  let trimmed = trim(raw);
+  match string_length(trimmed) > 0 {
+    True -> trimmed,
+    False -> fallback
+  }
+}
+
+function quote_json(value: String) -> String {
+  "\"" ++ escape(value) ++ "\""
+}
+
+function bool_json(value: Bool) -> String {
+  match value {
+    True -> "true",
+    False -> "false"
+  }
+}
+
+effect[Network] function respond_json(request_id: Int64, status: Int64, body_json: String) -> Unit {
+  http_respond(request_id, status, "{\"Content-Type\":\"application/json\"}", body_json)
+}
+
+effect[Network] function respond_text(request_id: Int64, status: Int64, body: String) -> Unit {
+  http_respond(request_id, status, "{\"Content-Type\":\"text/plain; charset=utf-8\"}", body)
+}
+
+function request_auth_header(req_json: String) -> String {
+  let lower = trim(get_nested_or(req_json, "headers.authorization", ""));
+  match string_length(lower) > 0 {
+    True -> lower,
+    False -> trim(get_nested_or(req_json, "headers.Authorization", ""))
+  }
+}
+
+function query_token_from_segments(segments: List<String>) -> String {
+  match is_empty(segments) {
+    True -> "",
+    False -> {
+      let segment = head(segments);
+      let eq_idx = index_of(segment, "=");
+      match eq_idx < 0 {
+        True -> query_token_from_segments(tail(segments)),
+        False -> {
+          let key = substring(segment, 0, eq_idx);
+          let value = substring(segment, eq_idx + 1, string_length(segment) - (eq_idx + 1));
+          match key == "token" {
+            True -> decode(value),
+            False -> query_token_from_segments(tail(segments))
+          }
+        }
+      }
+    }
+  }
+}
+
+function query_token(req_json: String) -> String {
+  let raw = get_or(req_json, "query", "");
+  let query = match string_starts_with(raw, "?") {
+    True -> substring(raw, 1, string_length(raw) - 1),
+    False -> raw
+  };
+  match string_length(query) == 0 {
+    True -> "",
+    False -> query_token_from_segments(split(query, "&"))
+  }
+}
+
+function is_authorized(req_json: String, token: String) -> Bool {
+  let required = trim(token);
+  match string_length(required) == 0 {
+    True -> True,
+    False -> {
+      let expected = "Bearer " ++ required;
+      let header_ok = request_auth_header(req_json) == expected;
+      let query_ok = trim(query_token(req_json)) == required;
+      header_ok or query_ok
+    }
+  }
+}
+
+function pending_item_json(row: QuestionRow) -> String {
+  let pid_field = match row.hasPid {
+    True -> ",\"pid\":" ++ int_to_string(row.pid),
+    False -> ""
+  };
+  "{"
+    ++ "\"key\":" ++ quote_json(row.key) ++ ","
+    ++ "\"question\":" ++ quote_json(row.question) ++ ","
+    ++ "\"timestamp\":" ++ int_to_string(row.timestamp)
+    ++ pid_field ++ ","
+    ++ "\"ageSeconds\":" ++ int_to_string(row.ageSeconds)
+  ++ "}"
+}
+
+function event_new_question_json(key: String, timestamp_ms: Int64) -> String {
+  "{"
+    ++ "\"type\":\"new_question\","
+    ++ "\"key\":" ++ quote_json(key) ++ ","
+    ++ "\"timestamp\":" ++ int_to_string(timestamp_ms)
+  ++ "}"
+}
+
+function event_answered_json(key: String) -> String {
+  "{"
+    ++ "\"type\":\"answered\","
+    ++ "\"key\":" ++ quote_json(key)
+  ++ "}"
+}
+
+effect[Network] function broadcast_event(subscribers: List<Int64>, payload: String) -> Unit {
+  match is_empty(subscribers) {
+    True -> noop_serve(),
+    False -> {
+      http_send_sse_event(head(subscribers), payload);
+      broadcast_event(tail(subscribers), payload)
+    }
+  }
+}
+
+effect[FileSystem, Time] function parse_question_row(
+  dir: String,
+  file_name: String,
+  now_ms: Int64
+) -> Option<QuestionRow> {
+  match is_question_file(file_name) {
+    False -> None,
+    True -> {
+      let safe_key = question_safe_key(file_name);
+      let question_path = path_join(dir, question_file_name(safe_key));
+      let answer_path = path_join(dir, answer_file_name(safe_key));
+      match file_exists(question_path) {
+        False -> None,
+        True -> {
+          let raw = read_file(question_path);
+          let key = normalize_key(get_or(raw, "key", safe_key), safe_key);
+          let question = get_or(raw, "question", raw);
+          let timestamp = parse_int_or(get_or(raw, "timestamp", int_to_string(now_ms)), now_ms);
+          let pid = parse_int_or(get_or(raw, "pid", "-1"), -1);
+          let age_secs = max_i64_local(0, (now_ms - timestamp) / 1000);
+          Some({
+            key: key,
+            safeKey: safe_key,
+            question: question,
+            timestamp: timestamp,
+            ageSeconds: age_secs,
+            hasPid: pid >= 0,
+            pid: pid,
+            answered: file_exists(answer_path)
+          })
+        }
+      }
+    }
+  }
+}
+
+effect[FileSystem, Time] function pending_json_from_entries(
+  entries: List<String>,
+  dir: String,
+  now_ms: Int64,
+  acc: String,
+  count: Int64
+) -> String {
+  match is_empty(entries) {
+    True -> "[" ++ acc ++ "]",
+    False -> {
+      let next: PendingJsonAcc = match parse_question_row(dir, head(entries), now_ms) {
+        None -> {
+          {
+            acc: acc,
+            count: count
+          }
+        },
+        Some(row) -> match row.answered {
+          True -> {
+            {
+              acc: acc,
+              count: count
+            }
+          },
+          False -> {
+            let item = pending_item_json(row);
+            let with_sep = match count > 0 {
+              True -> acc ++ "," ++ item,
+              False -> acc ++ item
+            };
+            {
+              acc: with_sep,
+              count: count + 1
+            }
+          }
+        }
+      };
+      pending_json_from_entries(tail(entries), dir, now_ms, next.acc, next.count)
+    }
+  }
+}
+
+effect[FileSystem, Time] function pending_questions_json(dir: String) -> String {
+  let now_ms = timestamp_to_int(now());
+  pending_json_from_entries(list_dir(dir), dir, now_ms, "", 0)
+}
+
+effect[FileSystem, Time, Network] function send_initial_events_to_subscriber(
+  entries: List<String>,
+  dir: String,
+  now_ms: Int64,
+  subscriber_id: Int64
+) -> Unit {
+  match is_empty(entries) {
+    True -> noop_serve(),
+    False -> {
+      match parse_question_row(dir, head(entries), now_ms) {
+        None -> noop_serve(),
+        Some(row) -> match row.answered {
+          True -> noop_serve(),
+          False -> http_send_sse_event(subscriber_id, event_new_question_json(row.key, row.timestamp))
+        }
+      };
+      send_initial_events_to_subscriber(tail(entries), dir, now_ms, subscriber_id)
+    }
+  }
+}
+
+effect[FileSystem, Time] function find_row_by_safe_key(
+  entries: List<String>,
+  dir: String,
+  now_ms: Int64,
+  safe_key: String
+) -> Option<QuestionRow> {
+  match is_empty(entries) {
+    True -> None,
+    False -> match parse_question_row(dir, head(entries), now_ms) {
+      None -> find_row_by_safe_key(tail(entries), dir, now_ms, safe_key),
+      Some(row) -> match row.safeKey == safe_key {
+        True -> Some(row),
+        False -> find_row_by_safe_key(tail(entries), dir, now_ms, safe_key)
+      }
+    }
+  }
+}
+
+effect[FileSystem, Time, Network] function handle_get_questions(request_id: Int64, dir: String) -> Unit {
+  respond_json(request_id, 200, pending_questions_json(dir))
+}
+
+effect[FileSystem, Time, Network] function handle_get_question_state(
+  request_id: Int64,
+  dir: String,
+  route_path: String
+) -> Unit {
+  let prefix = "/questions/";
+  let encoded = substring(route_path, string_length(prefix), string_length(route_path) - string_length(prefix));
+  let requested_key = trim(decode(encoded));
+  let safe_key = to_safe_key(requested_key);
+  let now_ms = timestamp_to_int(now());
+  let maybe_row = find_row_by_safe_key(list_dir(dir), dir, now_ms, safe_key);
+
+  match maybe_row {
+    None -> respond_json(
+      request_id,
+      200,
+      "{"
+        ++ "\"key\":" ++ quote_json(requested_key) ++ ","
+        ++ "\"safeKey\":" ++ quote_json(safe_key) ++ ","
+        ++ "\"status\":\"missing\""
+      ++ "}"
+    ),
+    Some(row) -> {
+      let answer_path = path_join(dir, answer_file_name(row.safeKey));
+      match file_exists(answer_path) {
+        True -> {
+          let response_text = trim(read_file(answer_path));
+          respond_json(
+            request_id,
+            200,
+            "{"
+              ++ "\"key\":" ++ quote_json(row.key) ++ ","
+              ++ "\"safeKey\":" ++ quote_json(row.safeKey) ++ ","
+              ++ "\"status\":\"answered\","
+              ++ "\"response\":" ++ quote_json(response_text)
+            ++ "}"
+          )
+        },
+        False -> respond_json(
+          request_id,
+          200,
+          "{"
+            ++ "\"key\":" ++ quote_json(row.key) ++ ","
+            ++ "\"safeKey\":" ++ quote_json(row.safeKey) ++ ","
+            ++ "\"status\":\"pending\""
+          ++ "}"
+        )
+      }
+    }
+  }
+}
+
+effect[FileSystem, Network, Time] function handle_post_question(
+  request_id: Int64,
+  req_json: String,
+  dir: String,
+  state: ServeState
+) -> ServeState {
+  let body = get_or(req_json, "body", "{}");
+  let key = trim(get_or(body, "key", ""));
+  let question = get_or(body, "question", "");
+  match string_length(key) == 0 or string_length(question) == 0 {
+    True -> {
+      respond_json(request_id, 400, "{\"error\":\"expected { key, question }\"}");
+      state
+    },
+    False -> {
+      let safe_key = to_safe_key(key);
+      let now_ms = timestamp_to_int(now());
+      let timestamp = parse_int_or(get_or(body, "timestamp", int_to_string(now_ms)), now_ms);
+      let pid = parse_int_or(get_or(body, "pid", "-1"), -1);
+      let pid_fragment = match pid >= 0 {
+        True -> ",\"pid\":" ++ int_to_string(pid),
+        False -> ""
+      };
+      let payload =
+        "{"
+          ++ "\"key\":" ++ quote_json(key) ++ ","
+          ++ "\"question\":" ++ quote_json(question) ++ ","
+          ++ "\"timestamp\":" ++ int_to_string(timestamp)
+          ++ pid_fragment
+        ++ "}\n";
+      let question_path = path_join(dir, question_file_name(safe_key));
+      let answer_path = path_join(dir, answer_file_name(safe_key));
+      write_file(question_path, payload);
+      match file_exists(answer_path) {
+        True -> remove_file(answer_path),
+        False -> noop_serve()
+      };
+      respond_json(
+        request_id,
+        200,
+        "{"
+          ++ "\"key\":" ++ quote_json(key) ++ ","
+          ++ "\"safeKey\":" ++ quote_json(safe_key) ++ ","
+          ++ "\"path\":" ++ quote_json(question_path)
+        ++ "}"
+      );
+      broadcast_event(state.subscribers, event_new_question_json(key, timestamp));
+      state
+    }
+  }
+}
+
+effect[FileSystem, Network] function handle_post_answer(
+  request_id: Int64,
+  req_json: String,
+  dir: String,
+  state: ServeState
+) -> ServeState {
+  let body = get_or(req_json, "body", "{}");
+  let key = trim(get_or(body, "key", ""));
+  let response = get(body, "response");
+  match string_length(key) == 0 {
+    True -> {
+      respond_json(request_id, 400, "{\"error\":\"expected { key, response }\"}");
+      state
+    },
+    False -> match response {
+      None -> {
+        respond_json(request_id, 400, "{\"error\":\"expected { key, response }\"}");
+        state
+      },
+      Some(response_text) -> {
+        let safe_key = to_safe_key(key);
+        let question_path = path_join(dir, question_file_name(safe_key));
+        let answer_path = path_join(dir, answer_file_name(safe_key));
+        match file_exists(question_path) {
+          False -> {
+            respond_json(request_id, 404, "{\"error\":\"question not found: " ++ escape(key) ++ "\"}");
+            state
+          },
+          True -> {
+            write_file(answer_path, response_text);
+            respond_json(
+              request_id,
+              200,
+              "{"
+                ++ "\"key\":" ++ quote_json(key) ++ ","
+                ++ "\"safeKey\":" ++ quote_json(safe_key) ++ ","
+                ++ "\"path\":" ++ quote_json(answer_path)
+              ++ "}"
+            );
+            broadcast_event(state.subscribers, event_answered_json(key));
+            state
+          }
+        }
+      }
+    }
+  }
+}
+
+effect[FileSystem, Network] function handle_post_cancel(
+  request_id: Int64,
+  req_json: String,
+  dir: String
+) -> Unit {
+  let body = get_or(req_json, "body", "{}");
+  let key = trim(get_or(body, "key", ""));
+  match string_length(key) == 0 {
+    True -> respond_json(request_id, 400, "{\"error\":\"expected { key }\"}"),
+    False -> {
+      let safe_key = to_safe_key(key);
+      let question_path = path_join(dir, question_file_name(safe_key));
+      let existed = file_exists(question_path);
+      match existed {
+        True -> remove_file(question_path),
+        False -> noop_serve()
+      };
+      respond_json(
+        request_id,
+        200,
+        "{"
+          ++ "\"key\":" ++ quote_json(key) ++ ","
+          ++ "\"safeKey\":" ++ quote_json(safe_key) ++ ","
+          ++ "\"removed\":" ++ bool_json(existed)
+        ++ "}"
+      )
+    }
+  }
+}
+
+effect[FileSystem, Network, Time] function handle_request(
+  req_json: String,
+  dir: String,
+  token: String,
+  state: ServeState
+) -> ServeState {
+  let request_id = parse_int_or(get_or(req_json, "id", "0"), 0);
+  let method = get_or(req_json, "method", "GET");
+  let path = get_or(req_json, "path", "/");
+
+  match request_id <= 0 {
+    True -> state,
+    False -> match is_authorized(req_json, token) {
+      False -> {
+        respond_json(
+          request_id,
+          401,
+          "{\"error\":\"unauthorized\"}"
+        );
+        state
+      },
+      True -> match method == "GET" and path == "/" {
+        True -> {
+          respond_text(request_id, 200, "clarity-hitl-broker");
+          state
+        },
+        False -> match method == "GET" and path == "/questions" {
+          True -> {
+            handle_get_questions(request_id, dir);
+            state
+          },
+          False -> match method == "GET" and path == "/events" {
+            True -> {
+              http_start_sse(
+                request_id,
+                "{\"Cache-Control\":\"no-cache\",\"Connection\":\"keep-alive\"}"
+              );
+              send_initial_events_to_subscriber(list_dir(dir), dir, timestamp_to_int(now()), request_id);
+              { subscribers: append(state.subscribers, request_id) }
+            },
+            False -> match method == "POST" and path == "/questions" {
+              True -> handle_post_question(request_id, req_json, dir, state),
+              False -> match method == "POST" and path == "/answer" {
+                True -> handle_post_answer(request_id, req_json, dir, state),
+                False -> match method == "POST" and path == "/cancel" {
+                  True -> {
+                    handle_post_cancel(request_id, req_json, dir);
+                    state
+                  },
+                  False -> {
+                    let prefix = "/questions/";
+                    match method == "GET" and string_starts_with(path, prefix) and string_length(path) > string_length(prefix) {
+                      True -> {
+                        handle_get_question_state(request_id, dir, path);
+                        state
+                      },
+                      False -> {
+                        respond_json(request_id, 404, "{\"error\":\"not_found\"}");
+                        state
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+effect[FileSystem, Network, Log, Time] function serve_loop(
+  server_handle: Int64,
+  dir: String,
+  token: String,
+  state: ServeState
+) -> Unit {
+  match http_next_request(server_handle) {
+    Err(msg) -> {
+      print_string("serve request error: " ++ msg);
+      serve_loop(server_handle, dir, token, state)
+    },
+    Ok(req_json) -> {
+      let next_state = handle_request(req_json, dir, token, state);
+      serve_loop(server_handle, dir, token, next_state)
+    }
+  }
+}
+
+effect[FileSystem, Secret] function resolve_dir(args: List<String>) -> String {
+  let positional_dir = trim(opt_str(positional(args, 0), ""));
+  let flag_dir = trim(flag_or(args, "dir", ""));
+  let raw = match string_length(flag_dir) > 0 {
+    True -> flag_dir,
+    False -> match string_length(positional_dir) > 0 {
+      True -> positional_dir,
+      False -> match get_secret("CLARITY_HITL_DIR") {
+        Some(v) -> v,
+        None -> ".clarity-hitl"
+      }
+    }
+  };
+  normalize_dir(raw)
+}
+
+function resolve_port(args: List<String>) -> Int64 {
+  clamp(1, 65535, flag_int_or(args, "port", 7842))
+}
+
+effect[Secret] function resolve_token(args: List<String>) -> String {
+  let flag_token = trim(flag_or(args, "token", ""));
+  match string_length(flag_token) > 0 {
+    True -> flag_token,
+    False -> match get_secret("CLARITY_HITL_BROKER_TOKEN") {
+      Some(v) -> trim(v),
+      None -> ""
+    }
+  }
+}
+
+export effect[Network, FileSystem, Secret, Log, Time] function run_hitl_serve(args: List<String>) -> Unit {
+  let dir = resolve_dir(args);
+  let port = resolve_port(args);
+  let token = resolve_token(args);
+
+  make_dir(dir);
+
+  match http_listen(port) {
+    Err(msg) -> {
+      print_string("Failed to start serve on port " ++ int_to_string(port) ++ ": " ++ msg);
+      exit(1)
+    },
+    Ok(server_handle) -> {
+      print_string("Serving HITL broker on http://127.0.0.1:" ++ int_to_string(port));
+      print_string("Handshake directory: " ++ dir);
+      match string_length(token) > 0 {
+        True -> print_string("Auth: bearer token required"),
+        False -> print_string("Auth: disabled")
+      };
+      serve_loop(server_handle, dir, token, { subscribers: [] })
+    }
+  }
+}

@@ -21,8 +21,23 @@ Implemented commands:
 - `list` — list pending local questions
 - `answer` — write a local `.answer` file for file-protocol HITL
 - `cancel` — remove a pending local question file
+- `serve` — host broker HTTP API (`/questions`, `/questions/:key`, `/answer`, `/cancel`, `/events`)
 
-Temporarily unsupported in native Clarity: `serve`
+## Operator UX command
+
+Use `claritycli` for the streamlined chat UX:
+
+- default target when no args are provided: `http://localhost:4707`
+- arrow-key (`up/down`) agent selection
+- simple chat transcript:
+  - `you> ...`
+  - `bot> ...`
+
+`claritycli` accepts:
+
+```bash
+claritycli [runtime-url] [--token <secret>]
+```
 
 These are blocked on language/runtime capabilities tracked in `docs/clarity-language-gap-requirements.md`.
 
@@ -35,6 +50,9 @@ npm run build
 # show help
 npx clarity-agent --help
 
+# streamlined operator UX (defaults to localhost:4707)
+npx claritycli
+
 # list runtime agents
 npx clarity-agent runtime-agents http://localhost:4707
 
@@ -43,6 +61,9 @@ npx clarity-agent runtime-chat http://localhost:4707
 
 # connect to remote broker
 npx clarity-agent connect http://localhost:7842
+
+# start broker HTTP server
+npx clarity-agent serve --port 7842
 
 # write local answer file
 npx clarity-agent answer review-step-3 "Looks good"
@@ -58,6 +79,7 @@ clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--
 clarity-agent list [dir] [--dir <path>]
 clarity-agent answer <key> <response> [--dir <path>]
 clarity-agent cancel <key> [dir] [--dir <path>]
+clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
 ```
 
 ## Runtime chat flow
@@ -81,7 +103,8 @@ clarity-agent cancel <key> [dir] [--dir <path>]
 |   |-- watch/main.clarity
 |   |-- list/main.clarity
 |   |-- cancel/main.clarity
-|   `-- answer/main.clarity
+|   |-- answer/main.clarity
+|   `-- serve/main.clarity
 |-- docs/
 |   |-- hitl-broker-spec.md
 |   |-- runtime-agent-chat-spec.md

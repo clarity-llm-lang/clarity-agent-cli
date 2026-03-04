@@ -8,6 +8,7 @@ import { run_hitl_answer } from "./answer/main"
 import { run_hitl_watch } from "./watch/main"
 import { run_hitl_list } from "./list/main"
 import { run_hitl_cancel } from "./cancel/main"
+import { run_hitl_serve } from "./serve/main"
 
 effect[Log] function usage() -> Unit {
   print_string("Clarity Agent CLI (native Clarity)");
@@ -20,15 +21,7 @@ effect[Log] function usage() -> Unit {
   print_string("  clarity-agent list [dir] [--dir <path>]");
   print_string("  clarity-agent answer <key> <response> [--dir <path>]");
   print_string("  clarity-agent cancel <key> [dir] [--dir <path>]");
-  print_string("");
-  print_string("Temporarily unsupported in native Clarity:");
-  print_string("  serve");
-}
-
-effect[Log] function unsupported_message(cmd: String) -> Unit {
-  print_string("Command not yet available in native Clarity: " ++ cmd);
-  print_string("Tracked requirements:");
-  print_string("  - RQ-LANG-CLI-NET-001 (http_listen runtime implementation)");
+  print_string("  clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]");
 }
 
 effect[Network, FileSystem, Secret, Log, Time] function main() -> Unit {
@@ -57,10 +50,7 @@ effect[Network, FileSystem, Secret, Log, Time] function main() -> Unit {
                 False -> match cmd == "cancel" {
                   True -> run_hitl_cancel(sub_args),
                   False -> match cmd == "serve" {
-                    True -> {
-                      unsupported_message(cmd);
-                      exit(2)
-                    },
+                    True -> run_hitl_serve(sub_args),
                     False -> {
                       print_string("Unknown command: " ++ cmd);
                       usage();

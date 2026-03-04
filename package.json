@@ -6,7 +6,7 @@
   "description": "CLI and broker interface for Human-in-the-Loop workflows across Clarity agents",
   "scripts": {
     "build": "npm run build:cli",
-    "build:cli": "mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && chmod +x dist/clarity-agent.cjs",
+    "build:cli": "mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && chmod +x dist/clarity-agent.cjs bin/claritycli.cjs",
     "dev": "clarityc run clarity/main.clarity -f main",
     "start": "node dist/clarity-agent.cjs",
     "lint:clarity": "node scripts/check-no-typescript.mjs",
@@ -18,7 +18,8 @@
   },
   "bin": {
     "clarity-agent": "dist/clarity-agent.cjs",
-    "clarity-hitl": "dist/clarity-agent.cjs"
+    "clarity-hitl": "dist/clarity-agent.cjs",
+    "claritycli": "bin/claritycli.cjs"
   },
   "dependencies": {
     "clarity-lang": "github:clarity-llm-lang/clarity-compiler#main"
