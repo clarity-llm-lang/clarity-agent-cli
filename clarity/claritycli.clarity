@@ -811,28 +811,34 @@ effect[TTY, Log] function select_indices_tty(
   count: Int64,
   idx: Int64,
   selected: List<Int64>,
-  rendered: Int64
+  rendered: Int64,
+  dirty: Bool
 ) -> List<Int64> {
-  match rendered > 0 {
-    True -> clear_rendered_lines(rendered),
-    False -> noop_cliui()
+  let next_rendered = match dirty {
+    True -> {
+      match rendered > 0 {
+        True -> clear_rendered_lines(rendered),
+        False -> noop_cliui()
+      };
+      render_selection_menu(runtime_url, items_json, idx, selected, 0)
+    },
+    False -> rendered
   };
-  let next_rendered = render_selection_menu(runtime_url, items_json, idx, selected, 0);
-  match tty_read_key(1000) {
-    None -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered),
+  match tty_read_key(30000) {
+    None -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered, False),
     Some(key) -> match key == "up" {
-      True -> select_indices_tty(runtime_url, items_json, count, (idx - 1 + count) % count, selected, next_rendered),
+      True -> select_indices_tty(runtime_url, items_json, count, (idx - 1 + count) % count, selected, next_rendered, True),
       False -> match key == "down" {
-        True -> select_indices_tty(runtime_url, items_json, count, (idx + 1) % count, selected, next_rendered),
+        True -> select_indices_tty(runtime_url, items_json, count, (idx + 1) % count, selected, next_rendered, True),
         False -> match key == "space" {
-          True -> select_indices_tty(runtime_url, items_json, count, idx, toggle_i64(selected, idx), next_rendered),
+          True -> select_indices_tty(runtime_url, items_json, count, idx, toggle_i64(selected, idx), next_rendered, True),
           False -> match key == "a" or key == "A" {
             True -> {
               let next_selected = match list_len(selected) == count {
                 True -> [],
                 False -> append_range(0, count, [])
               };
-              select_indices_tty(runtime_url, items_json, count, idx, next_selected, next_rendered)
+              select_indices_tty(runtime_url, items_json, count, idx, next_selected, next_rendered, True)
             },
             False -> match key == "enter" {
               True -> {
@@ -848,7 +854,7 @@ effect[TTY, Log] function select_indices_tty(
                   clear_rendered_lines(next_rendered);
                   []
                 },
-                False -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered)
+                False -> select_indices_tty(runtime_url, items_json, count, idx, selected, next_rendered, False)
               }
             }
           }
@@ -904,7 +910,7 @@ effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_
       True -> {
         tty_enter_raw();
         tty_hide_cursor();
-        let selected = select_indices_tty(runtime_url, items_json, count, 0, [], 0);
+        let selected = select_indices_tty(runtime_url, items_json, count, 0, [], 0, True);
         tty_show_cursor();
         tty_exit_raw();
         selected
