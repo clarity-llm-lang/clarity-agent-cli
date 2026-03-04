@@ -30,6 +30,10 @@
   - Removes pending local question files
 - `clarity/answer/main.clarity`
   - Writes local `{safeKey}.answer` for file-protocol HITL
+- `clarity/serve/main.clarity`
+  - Hosts broker HTTP API (`/questions`, `/questions/:key`, `/answer`, `/cancel`, `/events`)
+  - Optional bearer token auth (`--token`)
+  - Emits broker SSE events for `new_question` and `answered`
 
 ## Compatibility status
 
@@ -39,10 +43,7 @@ Supported:
 - remote broker connect/answer over HTTP
 - local answer-file writing
 - local file-protocol watch/list/cancel flow
-
-Blocked pending language/runtime features:
-
-- embedded broker HTTP server (`serve` parity)
+- embedded broker HTTP server via native Clarity `serve`
 
 Gap requirements are tracked in `docs/clarity-language-gap-requirements.md`.
 
@@ -50,4 +51,4 @@ Gap requirements are tracked in `docs/clarity-language-gap-requirements.md`.
 
 - `npm run build` packs the single Clarity router launcher.
 - `npm run lint` enforces no TypeScript sources in this repo.
-- `npm run test` validates router behavior, runtime-agent listing, and local HITL list/cancel behavior.
+- `npm run test` validates router behavior, runtime-agent listing, native `serve` broker API, and local HITL list/cancel behavior.
