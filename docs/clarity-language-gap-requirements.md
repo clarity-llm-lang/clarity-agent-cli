@@ -144,6 +144,7 @@ All previously blocked commands are now unblocked:
 Known caveat:
 
 - `claritycli` includes automatic fallback from arrow-key selection to numeric selection when TTY key delivery is unavailable (see RQ-LANG-CLI-TTY-003).
+- `claritycli` defaults to numeric selection; arrow-key mode is opt-in via `--tty-select` until RQ-LANG-CLI-TTY-003 is resolved.
 
 ## Backlog item
 

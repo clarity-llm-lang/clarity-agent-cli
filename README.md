@@ -36,8 +36,11 @@ Use `claritycli` for the streamlined chat UX:
 `claritycli` accepts:
 
 ```bash
-claritycli [runtime-url] [--token <secret>]
+claritycli [runtime-url] [--token <secret>] [--tty-select]
 ```
+
+- Default selection UX is numeric prompt (stable across terminals).
+- Optional: `--tty-select` enables arrow-key selection when terminal key stream is reliable.
 
 ## Install and run
 

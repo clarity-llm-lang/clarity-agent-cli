@@ -969,7 +969,7 @@ effect[FileSystem, Log] function select_indices_prompt(items_json: String) -> Li
   }
 }
 
-effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_json: String) -> List<Int64> {
+effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_json: String, use_tty_select: Bool) -> List<Int64> {
   let count = arr_len(items_json);
   let default_idx_raw = first_api_index(items_json, 0);
   let default_idx = match default_idx_raw >= 0 and default_idx_raw < count {
@@ -978,7 +978,7 @@ effect[FileSystem, Log, TTY] function select_indices(runtime_url: String, items_
   };
   match count <= 0 {
     True -> [],
-    False -> match tty_is_tty() {
+    False -> match use_tty_select and tty_is_tty() {
       False -> select_indices_prompt(items_json),
       True -> {
         tty_enter_raw();
@@ -1357,11 +1357,11 @@ effect[Network, FileSystem, Log, Time] function chat_loop(runtime_url: String, t
 }
 
 effect[Log] function usage() -> Unit {
-  print_string("claritycli [runtime-url] [--token <secret>]");
+  print_string("claritycli [runtime-url] [--token <secret>] [--tty-select]");
   print_string("");
   print_string("Flow:");
   print_string("1. Connects to runtime (default http://localhost:4707)");
-  print_string("2. Lets you invite one or more bots (up/down + space + enter)");
+  print_string("2. Lets you invite one or more bots (numeric selection by default; --tty-select enables arrows)");
   print_string("3. Lets you name each bot with easy aliases (e.g. coder, ux)");
   print_string("4. Starts chat room with targeted messaging and discuss mode");
   print_string("");
@@ -1385,6 +1385,7 @@ effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> U
       let runtime_arg = opt_str(positional(args, 0), "");
       let runtime_url = normalize_runtime_url(runtime_arg);
       let token_flag = trim(flag_or(args, "token", ""));
+      let use_tty_select = has_flag(args, "tty-select");
       let token = match string_length(token_flag) > 0 {
         True -> token_flag,
         False -> match get_secret("CLARITY_RUNTIME_TOKEN") {
@@ -1407,7 +1408,7 @@ effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> U
               exit(1)
             },
             False -> {
-              let selected_indices = select_indices(runtime_url, items_json);
+              let selected_indices = select_indices(runtime_url, items_json, use_tty_select);
               match is_empty(selected_indices) {
                 True -> {
                   print_string("Selection cancelled.");
