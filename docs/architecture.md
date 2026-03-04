@@ -12,26 +12,26 @@
 
 ## Native command modules
 
-- `clarity/runtime-chat/main.clarity`
+- `clarity/runtime-chat/runtime-chat.clarity`
   - Connects to runtime registry
   - Selects service by number or service id
   - Boots run events when needed
   - Sends chat messages to run-scoped endpoint
   - Consumes SSE stream with poll fallback
-- `clarity/runtime-agents/main.clarity`
+- `clarity/runtime-agents/runtime-agents.clarity`
   - Lists agent services from `/api/agents/registry`
-- `clarity/connect/main.clarity`
+- `clarity/connect/connect.clarity`
   - Polls remote broker `/questions`
   - Submits responses via `/answer`
-- `clarity/watch/main.clarity`
+- `clarity/watch/watch.clarity`
   - Polls `.question` files and captures operator responses
-- `clarity/list/main.clarity`
+- `clarity/list/list.clarity`
   - Lists pending local questions from handshake directory
-- `clarity/cancel/main.clarity`
+- `clarity/cancel/cancel.clarity`
   - Removes pending local question files
-- `clarity/answer/main.clarity`
+- `clarity/answer/answer.clarity`
   - Writes local `{safeKey}.answer` for file-protocol HITL
-- `clarity/serve/main.clarity`
+- `clarity/serve/serve.clarity`
   - Hosts broker HTTP API (`/questions`, `/questions/:key`, `/answer`, `/cancel`, `/events`)
   - Optional bearer token auth (`--token`)
   - Emits broker SSE events for `new_question` and `answered`

@@ -113,14 +113,14 @@ clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
 |-- clarity/
 |   |-- main.clarity
 |   |-- claritycli.clarity
-|   |-- runtime-chat/main.clarity
-|   |-- runtime-agents/main.clarity
-|   |-- connect/main.clarity
-|   |-- watch/main.clarity
-|   |-- list/main.clarity
-|   |-- cancel/main.clarity
-|   |-- answer/main.clarity
-|   `-- serve/main.clarity
+|   |-- runtime-chat/runtime-chat.clarity
+|   |-- runtime-agents/runtime-agents.clarity
+|   |-- connect/connect.clarity
+|   |-- watch/watch.clarity
+|   |-- list/list.clarity
+|   |-- cancel/cancel.clarity
+|   |-- answer/answer.clarity
+|   `-- serve/serve.clarity
 |-- docs/
 |   |-- hitl-broker-spec.md
 |   |-- runtime-agent-chat-spec.md

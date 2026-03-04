@@ -1,14 +1,14 @@
 module Main
 
 import { command_or, has_flag } from "std/cli"
-import { run_runtime_chat } from "./runtime-chat/main"
-import { run_runtime_agents } from "./runtime-agents/main"
-import { run_broker_connect } from "./connect/main"
-import { run_hitl_answer } from "./answer/main"
-import { run_hitl_watch } from "./watch/main"
-import { run_hitl_list } from "./list/main"
-import { run_hitl_cancel } from "./cancel/main"
-import { run_hitl_serve } from "./serve/main"
+import { run_runtime_chat } from "./runtime-chat/runtime-chat"
+import { run_runtime_agents } from "./runtime-agents/runtime-agents"
+import { run_broker_connect } from "./connect/connect"
+import { run_hitl_answer } from "./answer/answer"
+import { run_hitl_watch } from "./watch/watch"
+import { run_hitl_list } from "./list/list"
+import { run_hitl_cancel } from "./cancel/cancel"
+import { run_hitl_serve } from "./serve/serve"
 
 effect[Log] function usage() -> Unit {
   print_string("Clarity Agent CLI (native Clarity)");
