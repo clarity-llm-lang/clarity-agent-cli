@@ -127,4 +127,4 @@ npm run test
 - `runtime-chat` is fully Clarity-native.
 - `claritycli` is fully Clarity-native (`clarity/claritycli.clarity` -> `dist/claritycli.cjs`).
 - Distribution is generated with `clarityc pack` into `dist/clarity-agent.cjs` from `clarity/main.clarity`.
-- No TypeScript source remains in production CLI paths.
+- Lint enforces Clarity-only implementation files under `clarity/`, `src/`, and `bin/`.

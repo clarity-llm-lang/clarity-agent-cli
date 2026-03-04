@@ -6,10 +6,10 @@
   "description": "CLI and broker interface for Human-in-the-Loop workflows across Clarity agents",
   "scripts": {
     "build": "npm run build:cli",
-    "build:cli": "mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && clarityc pack clarity/claritycli.clarity -f main -o dist/claritycli.cjs && chmod +x dist/clarity-agent.cjs dist/claritycli.cjs",
+    "build:cli": "rm -rf dist && mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && clarityc pack clarity/claritycli.clarity -f main -o dist/claritycli.cjs && chmod +x dist/clarity-agent.cjs dist/claritycli.cjs",
     "dev": "clarityc run clarity/main.clarity -f main",
     "start": "node dist/clarity-agent.cjs",
-    "lint:clarity": "node scripts/check-no-typescript.mjs",
+    "lint:clarity": "bash scripts/check-pure-clarity.sh",
     "lint": "npm run lint:clarity",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
