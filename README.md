@@ -36,8 +36,11 @@ Use `claritycli` for the streamlined chat UX:
 `claritycli` accepts:
 
 ```bash
-claritycli [runtime-url] [--token <secret>]
+claritycli [runtime-url] [--token <secret>] [--tty-select]
 ```
+
+- Default selection UX is numeric prompt (stable across terminals).
+- Optional: `--tty-select` enables arrow-key selection when terminal key stream is reliable.
 
 ## Install and run
 
@@ -66,6 +69,23 @@ npx clarity-agent serve --port 7842
 # write local answer file
 npx clarity-agent answer review-step-3 "Looks good"
 ```
+
+## Install direct commands (no npx)
+
+```bash
+npm install
+npm run install:bin
+
+# now callable directly
+claritycli
+clarity-agent --help
+```
+
+Notes:
+
+- By default, commands are linked into `~/.local/bin`.
+- Override install target with `CLARITY_BIN_DIR=/your/bin npm run install:bin`.
+- If needed, add to shell path: `export PATH="$HOME/.local/bin:$PATH"`.
 
 ## CLI commands
 
@@ -96,14 +116,14 @@ clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
 |-- clarity/
 |   |-- main.clarity
 |   |-- claritycli.clarity
-|   |-- runtime-chat/main.clarity
-|   |-- runtime-agents/main.clarity
-|   |-- connect/main.clarity
-|   |-- watch/main.clarity
-|   |-- list/main.clarity
-|   |-- cancel/main.clarity
-|   |-- answer/main.clarity
-|   `-- serve/main.clarity
+|   |-- runtime-chat/runtime-chat.clarity
+|   |-- runtime-agents/runtime-agents.clarity
+|   |-- connect/connect.clarity
+|   |-- watch/watch.clarity
+|   |-- list/list.clarity
+|   |-- cancel/cancel.clarity
+|   |-- answer/answer.clarity
+|   `-- serve/serve.clarity
 |-- docs/
 |   |-- hitl-broker-spec.md
 |   |-- runtime-agent-chat-spec.md

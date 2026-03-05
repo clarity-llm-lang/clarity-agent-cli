@@ -68,5 +68,5 @@ Single-start UX for `runtime-chat`:
 
 - Router: `clarity/main.clarity`
 - Packed launcher: `dist/clarity-agent.cjs`
-- Chat engine: `clarity/runtime-chat/main.clarity`
-- Registry listing: `clarity/runtime-agents/main.clarity`
+- Chat engine: `clarity/runtime-chat/runtime-chat.clarity`
+- Registry listing: `clarity/runtime-agents/runtime-agents.clarity`
