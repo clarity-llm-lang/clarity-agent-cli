@@ -4,12 +4,24 @@
 
 `clarity-agent-cli` provides a standalone operator interface for Clarity HITL workflows.
 
+## Workspace scope
+
+- `LLM-lang`: language definition and compiler.
+- `LLM-runtime`: runtime to run applications, MCPs, and agents developed with Clarity.
+- `LLM-cli`: operator interface used to connect to agents running in `LLM-runtime`.
+
 ## Guardrails
 
 - Keep command behavior aligned with `docs/hitl-broker-spec.md`.
 - Preserve file protocol compatibility (`.question` / `.answer`) for runtime integrations.
 - Maintain CI parity with this repo's `.github/workflows/` baseline.
 - Run `npm run build`, `npm run lint`, and `npm test` before shipping changes.
+
+## Requirement status
+
+- CLI-specific requirement items are currently closed (see `docs/clarity-language-gap-requirements.md` status sections).
+- Canonical language-registry entries requested by `LLM-cli` are currently marked done in `../LLM-lang/docs/runtime-cli-language-requirements.md`.
+- If a new CLI language/runtime gap is discovered, add or update the canonical registry entry immediately in the same change.
 
 ## Working mode
 
@@ -27,8 +39,8 @@
 
 ## Language-first policy
 
-- CLI production implementation must be native Clarity.
-- If any required behavior cannot be implemented with current Clarity language/runtime capabilities, add a formal requirement entry in project requirements docs immediately.
+- CLI production implementation must be native Clarity only.
+- If any required behavior cannot be implemented with current Clarity language/runtime capabilities, add or update an entry in `../LLM-lang/docs/runtime-cli-language-requirements.md` immediately.
 - When such a gap is identified, explicitly raise a question to the stakeholder: implement a temporary workaround anyway, or wait for language/runtime support.
 
 ## Module naming policy
