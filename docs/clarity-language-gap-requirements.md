@@ -69,21 +69,14 @@ All require `effect[TTY]` (except `tty_is_tty`). Implementation uses a persisten
 
 All ANSI writes are no-ops or fall back to defaults in non-TTY environments (CI, pipes). `tty_is_tty()` lets callers gate interactive rendering.
 
-### RQ-LANG-CLI-TTY-003: Reliable raw key delivery in interactive terminals
+### RQ-LANG-CLI-TTY-003: Reliable raw key delivery in interactive terminals ✅ DONE
 
-Need `tty_read_key()` to reliably block and deliver key events on macOS interactive terminals.
+**Implemented (2026-03-06):**
 
-Observed issue (2026-03-04):
+- `tty_read_key()` macOS escape-sequence delivery was stabilized in `LLM-lang`.
+- `tty_read_numeric_choice(count)` is available as a terminal-agnostic fallback path for non-raw or constrained environments.
 
-- `claritycli` enters raw mode and renders menu, but `tty_read_key()` can return `None` immediately in a tight loop.
-- This causes unbounded recursive polling in user code and eventually `WebAssembly.Memory.grow(): Maximum memory size exceeded`.
-- `LLM-cli` now contains a defensive fallback: after repeated `None`, it exits TTY mode and falls back to numeric prompt selection.
-
-Acceptance criteria:
-
-- In a real interactive terminal (`tty_is_tty() == True`), `tty_read_key(timeout_ms)` must not permanently return immediate `None` when stdin is open.
-- Arrow keys / enter / space are delivered consistently without fallback.
-- Worker-backed stdin handling should not enter persistent EOF state while the parent process still has interactive stdin.
+`LLM-cli` keeps numeric fallback as a safety path, but no longer depends on it as the default interactive UX.
 
 ### RQ-LANG-CLI-ROOM-001: Multi-run event fan-in for multi-agent chat rooms ✅ DONE
 
@@ -148,8 +141,8 @@ All previously blocked commands are now unblocked:
 
 Known caveat:
 
-- `claritycli` includes automatic fallback from arrow-key selection to numeric selection when TTY key delivery is unavailable (see RQ-LANG-CLI-TTY-003).
-- `claritycli` now defaults to arrow-key selection in TTY mode, with automatic numeric fallback (and explicit `--no-tty-select`) while RQ-LANG-CLI-TTY-003 remains in progress.
+- `claritycli` includes automatic fallback from arrow-key selection to numeric selection when TTY key delivery is unavailable in the host terminal/session.
+- `claritycli` defaults to arrow-key selection in TTY mode, with automatic numeric fallback (and explicit `--no-tty-select`) for compatibility.
 
 ## Backlog item
 
@@ -174,8 +167,8 @@ Known caveat:
 - Item: ~~Implement RQ-LANG-CLI-FS-003 optional file watch primitive for lower-latency `watch` command.~~ Done.
 
 - Backlog ID: `LANG-CLI-TTY-003`
-- Priority: `P1`
-- Item: Implement RQ-LANG-CLI-TTY-003 so interactive arrow-key selection is stable without fallback on macOS interactive terminals.
+- Priority: `P1` ✅ DONE (2026-03-06)
+- Item: ~~Implement RQ-LANG-CLI-TTY-003 so interactive arrow-key selection is stable without fallback on macOS interactive terminals.~~ Done in language/runtime; CLI retains compatibility fallback.
 
 ## Cross-Project Audit Intake (2026-03-06)
 
@@ -189,7 +182,7 @@ This section records non-language parity findings that still block production-qu
 
 ### UX Requirements (Status)
 
-1. `RQ-CLI-UX-001` (P1): ⚠ In progress. Default TTY behavior now prefers arrow-key selection with numeric fallback; full closure still depends on `RQ-LANG-CLI-TTY-003` runtime key-delivery reliability.
+1. `RQ-CLI-UX-001` (P1): ✅ Done. Default TTY behavior now prefers arrow-key selection with numeric fallback as compatibility only; no default dependence on numeric mode.
 2. `RQ-CLI-UX-002` (P1): ✅ Done. Token handling is standardized across runtime and broker commands (`--token` -> env var -> empty).
 3. `RQ-CLI-UX-003` (P2): ✅ Done. README/spec/architecture docs updated to Clarity-native command paths and current behavior.
 
