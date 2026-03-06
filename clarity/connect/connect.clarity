@@ -142,6 +142,32 @@ function list_contains(values: List<String>, target: String) -> Bool {
   }
 }
 
+function list_len<T>(values: List<T>) -> Int64 {
+  match is_empty(values) {
+    True -> 0,
+    False -> 1 + list_len(tail(values))
+  }
+}
+
+function drop_first<T>(values: List<T>, n: Int64) -> List<T> {
+  match n <= 0 or is_empty(values) {
+    True -> values,
+    False -> drop_first(tail(values), n - 1)
+  }
+}
+
+function trim_to_last<T>(values: List<T>, limit: Int64) -> List<T> {
+  let size = list_len(values);
+  match size <= limit {
+    True -> values,
+    False -> drop_first(values, size - limit)
+  }
+}
+
+function append_seen_bounded(seen: List<String>, marker: String) -> List<String> {
+  trim_to_last(append(seen, marker), 5000)
+}
+
 function age_seconds(item_json: String, now_ms: Int64) -> Int64 {
   let direct = parse_int_or(get_or(item_json, "ageSeconds", "-1"), -1);
   match direct >= 0 {
@@ -198,7 +224,7 @@ effect[Network, FileSystem, Log, Time] function process_pending(
               match skip_old {
                 True -> {
                   print_string("[" ++ timestamp_to_string(now()) ++ "] skipped " ++ key ++ " (age " ++ int_to_string(age_secs) ++ "s > " ++ int_to_string(timeout_secs) ++ "s)");
-                  { seen: append(state.seen, marker) }
+                  { seen: append_seen_bounded(state.seen, marker) }
                 },
                 False -> {
                   print_question_box(key, text, age_secs);
@@ -214,7 +240,7 @@ effect[Network, FileSystem, Log, Time] function process_pending(
                     Err(msg) -> print_string("[" ++ timestamp_to_string(now()) ++ "] answer error " ++ key ++ ": " ++ msg),
                     Ok(_) -> print_string("[" ++ timestamp_to_string(now()) ++ "] answered " ++ key)
                   };
-                  { seen: append(state.seen, marker) }
+                  { seen: append_seen_bounded(state.seen, marker) }
                 }
               }
             }
@@ -245,7 +271,18 @@ effect[Network, FileSystem, Log, Time] function connect_loop(
   connect_loop(base_url, token, poll_ms, timeout_secs, auto_approve, next_state)
 }
 
-export effect[Network, FileSystem, Log, Time] function run_broker_connect(args: List<String>) -> Unit {
+effect[Secret] function resolve_broker_token(args: List<String>) -> String {
+  let flag_token = trim(flag_or(args, "token", ""));
+  match string_length(flag_token) > 0 {
+    True -> flag_token,
+    False -> match get_secret("CLARITY_HITL_BROKER_TOKEN") {
+      Some(v) -> trim(v),
+      None -> ""
+    }
+  }
+}
+
+export effect[Network, FileSystem, Secret, Log, Time] function run_broker_connect(args: List<String>) -> Unit {
   let broker_arg = opt_str(positional(args, 0), "");
   let broker_raw = match string_length(trim(broker_arg)) > 0 {
     True -> broker_arg,
@@ -253,7 +290,7 @@ export effect[Network, FileSystem, Log, Time] function run_broker_connect(args: 
   };
 
   let base_url = normalize_broker_url(broker_raw);
-  let token = trim(flag_or(args, "token", ""));
+  let token = resolve_broker_token(args);
   let poll_ms = clamp(300, 5000, flag_int_or(args, "poll-ms", 1200));
   let timeout_secs = parse_int_or(flag_or(args, "timeout", "-1"), -1);
   let auto_approve = has_flag(args, "auto-approve");

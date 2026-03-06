@@ -14,14 +14,14 @@ effect[Log] function usage() -> Unit {
   print_string("Clarity Agent CLI (native Clarity)");
   print_string("");
   print_string("Usage:");
-  print_string("  clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]");
+  print_string("  clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--resume-latest] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]");
   print_string("  clarity-agent runtime-agents [runtime-url] [--token <secret>]");
   print_string("  clarity-agent connect [broker-url] [--token <secret>] [--poll-ms <ms>] [--timeout <secs>] [--auto-approve]");
   print_string("  clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--log <file>] [--poll-ms <ms>]");
   print_string("  clarity-agent list [dir] [--dir <path>]");
   print_string("  clarity-agent answer <key> <response> [--dir <path>]");
   print_string("  clarity-agent cancel <key> [dir] [--dir <path>]");
-  print_string("  clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]");
+  print_string("  clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>] [--allow-query-token]");
 }
 
 effect[Network, FileSystem, Secret, Log, Time] function main() -> Unit {

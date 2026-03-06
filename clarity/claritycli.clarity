@@ -1,8 +1,26 @@
 module ClarityCli
 
 import { positional, flag_or, has_flag } from "std/cli"
-import { get, get_or, get_nested_or, arr_get, arr_len, escape } from "std/json"
-import { encode } from "std/url"
+import { get_or, get_nested_or, arr_get, arr_len } from "std/json"
+import {
+  opt_str,
+  parse_int_or,
+  clamp,
+  bool_not,
+  auth_headers,
+  json_headers,
+  request_full_checked,
+  registry_url,
+  run_events_url,
+  run_messages_url,
+  agents_events_url,
+  run_created_payload,
+  run_started_payload,
+  user_message_payload,
+  event_items_json,
+  event_message,
+  is_terminal_kind
+} from "./runtime-shared/runtime-shared"
 
 type AgentChoice = {
   serviceId: String,
@@ -52,13 +70,6 @@ type PendingLines = {
 
 function noop_cliui() -> Unit {}
 
-function opt_str(value: Option<String>, fallback: String) -> String {
-  match value {
-    Some(v) -> v,
-    None -> fallback
-  }
-}
-
 function non_empty_or(value: String, fallback: String) -> String {
   match string_length(trim(value)) > 0 {
     True -> value,
@@ -66,43 +77,19 @@ function non_empty_or(value: String, fallback: String) -> String {
   }
 }
 
-function parse_int_or(text: String, fallback: Int64) -> Int64 {
-  match string_to_int(text) {
-    Some(v) -> v,
-    None -> fallback
-  }
-}
-
-function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
-  match value < min_v {
-    True -> min_v,
-    False -> match value > max_v {
-      True -> max_v,
-      False -> value
-    }
-  }
-}
-
-function bool_not(value: Bool) -> Bool {
-  match value {
-    True -> False,
-    False -> True
-  }
-}
-
-function strip_trailing_slash(url: String) -> String {
+function strip_trailing_slash_cli(url: String) -> String {
   let trimmed = trim(url);
   match string_length(trimmed) == 0 {
     True -> trimmed,
     False -> match string_ends_with(trimmed, "/") {
-      True -> strip_trailing_slash(substring(trimmed, 0, string_length(trimmed) - 1)),
+      True -> strip_trailing_slash_cli(substring(trimmed, 0, string_length(trimmed) - 1)),
       False -> trimmed
     }
   }
 }
 
-function normalize_runtime_url(raw: String) -> String {
-  let trimmed = strip_trailing_slash(raw);
+function normalize_runtime_url_cli(raw: String) -> String {
+  let trimmed = strip_trailing_slash_cli(raw);
   match string_length(trimmed) == 0 {
     True -> "http://localhost:4707",
     False -> match string_starts_with(trimmed, "http://") {
@@ -113,30 +100,6 @@ function normalize_runtime_url(raw: String) -> String {
       }
     }
   }
-}
-
-function quote_json(value: String) -> String {
-  "\"" ++ escape(value) ++ "\""
-}
-
-function auth_headers(token: String) -> String {
-  let t = trim(token);
-  match string_length(t) == 0 {
-    True -> "{}",
-    False -> "{\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
-  }
-}
-
-function json_headers(token: String) -> String {
-  let t = trim(token);
-  match string_length(t) == 0 {
-    True -> "{\"Content-Type\":\"application/json\"}",
-    False -> "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
-  }
-}
-
-function is_http_success(status: Int64) -> Bool {
-  status >= 200 and status <= 299
 }
 
 function display_agent(item_json: String) -> String {
@@ -233,114 +196,8 @@ function sort_i64(values: List<Int64>) -> List<Int64> {
   values
 }
 
-effect[Network] function request_full_checked(method: String, url: String, headers_json: String, body: String) -> Result<String, String> {
-  match http_request_full(method, url, headers_json, body) {
-    Err(msg) -> Err(msg),
-    Ok(payload) -> {
-      let status_text = get_or(payload, "status", "0");
-      let response_body = get_or(payload, "body", "");
-      match string_to_int(status_text) {
-        None -> Err(method ++ " " ++ url ++ " returned malformed status"),
-        Some(status) -> match is_http_success(status) {
-          True -> Ok(response_body),
-          False -> Err(method ++ " " ++ url ++ " failed (" ++ status_text ++ "): " ++ response_body)
-        }
-      }
-    }
-  }
-}
-
-function registry_url(base: String) -> String {
-  base ++ "/api/agents/registry"
-}
-
-function run_events_url(base: String, run_id: String) -> String {
-  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events?limit=200"
-}
-
-function run_messages_url(base: String, run_id: String) -> String {
-  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/messages"
-}
-
-function agents_events_url(base: String) -> String {
-  base ++ "/api/agents/events"
-}
-
 effect[Time, Random] function create_run_id() -> String {
   "run_cli_" ++ int_to_string(timestamp_to_int(now())) ++ "_" ++ int_to_string(random_int(1000, 999999))
-}
-
-function trigger_context_json(run_id: String) -> String {
-  "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":" ++ quote_json(run_id) ++ ",\"caller\":\"claritycli\"}"
-}
-
-function run_created_payload(service_id: String, agent: String, run_id: String, trigger: String) -> String {
-  let ctx = trigger_context_json(run_id);
-  "{"
-    ++ "\"kind\":\"agent.run_created\","
-    ++ "\"level\":\"info\","
-    ++ "\"message\":" ++ quote_json("agent.run_created (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent) ++ ","
-    ++ "\"data\":{"
-      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
-      ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
-      ++ "\"triggerContext\":" ++ ctx ++ ","
-      ++ "\"route\":\"/cli/runtime-chat\","
-      ++ "\"method\":\"CLI\","
-      ++ "\"requestId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"caller\":\"claritycli\""
-    ++ "}"
-  ++ "}"
-}
-
-function run_started_payload(service_id: String, agent: String, run_id: String, trigger: String) -> String {
-  let ctx = trigger_context_json(run_id);
-  "{"
-    ++ "\"kind\":\"agent.run_started\","
-    ++ "\"level\":\"info\","
-    ++ "\"message\":" ++ quote_json("agent.run_started (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent) ++ ","
-    ++ "\"data\":{"
-      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
-      ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
-      ++ "\"triggerContext\":" ++ ctx
-    ++ "}"
-  ++ "}"
-}
-
-function user_message_payload(service_id: String, agent: String, message: String) -> String {
-  "{"
-    ++ "\"message\":" ++ quote_json(message) ++ ","
-    ++ "\"role\":\"user\","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent)
-  ++ "}"
-}
-
-function is_terminal_event(kind: String) -> Bool {
-  kind == "agent.run_completed" or kind == "agent.run_failed" or kind == "agent.run_cancelled"
-}
-
-function event_message(event_json: String) -> String {
-  let a = get_nested_or(event_json, "data.message", "");
-  match string_length(a) > 0 {
-    True -> a,
-    False -> {
-      let b = get_nested_or(event_json, "data.text", "");
-      match string_length(b) > 0 {
-        True -> b,
-        False -> get_or(event_json, "message", "")
-      }
-    }
-  }
 }
 
 effect[Network] function fetch_registry(runtime_url: String, token: String) -> Result<String, String> {
@@ -352,14 +209,14 @@ effect[Network] function bootstrap_with_trigger(runtime_url: String, token: Stri
     "POST",
     agents_events_url(runtime_url),
     json_headers(token),
-    run_created_payload(participant.serviceId, participant.agentId, participant.runId, trigger)
+    run_created_payload(participant.serviceId, participant.agentId, participant.runId, trigger, "claritycli")
   ) {
     Err(msg) -> Err(msg),
     Ok(_) -> request_full_checked(
       "POST",
       agents_events_url(runtime_url),
       json_headers(token),
-      run_started_payload(participant.serviceId, participant.agentId, participant.runId, trigger)
+      run_started_payload(participant.serviceId, participant.agentId, participant.runId, trigger, "claritycli")
     )
   }
 }
@@ -378,7 +235,10 @@ effect[Network] function send_user_message(runtime_url: String, token: String, p
 }
 
 effect[Network] function fetch_events(runtime_url: String, token: String, run_id: String) -> Result<String, String> {
-  request_full_checked("GET", run_events_url(runtime_url, run_id), auth_headers(token), "")
+  match request_full_checked("GET", run_events_url(runtime_url, run_id, 200), auth_headers(token), "") {
+    Err(msg) -> Err(msg),
+    Ok(body) -> Ok(event_items_json(body))
+  }
 }
 
 function scan_events(items_json: String, idx: Int64, scan: TurnScan) -> TurnScan {
@@ -405,7 +265,7 @@ function scan_events(items_json: String, idx: Int64, scan: TurnScan) -> TurnScan
                   True -> msg,
                   False -> scan.stepCompletedMessage
                 },
-                terminalKind: match is_terminal_event(kind) {
+                terminalKind: match is_terminal_kind(kind) {
                   True -> kind,
                   False -> scan.terminalKind
                 }
@@ -1369,11 +1229,11 @@ effect[Network, FileSystem, Log, Time, TTY] function chat_loop(runtime_url: Stri
 }
 
 effect[Log] function usage() -> Unit {
-  print_string("claritycli [runtime-url] [--token <secret>] [--tty-select]");
+  print_string("claritycli [runtime-url] [--token <secret>] [--no-tty-select]");
   print_string("");
   print_string("Flow:");
   print_string("1. Connects to runtime (default http://localhost:4707)");
-  print_string("2. Lets you invite one or more bots (numeric selection by default; --tty-select enables arrows)");
+  print_string("2. Lets you invite one or more bots (arrow-key selection by default with numeric fallback)");
   print_string("3. Lets you name each bot with easy aliases (e.g. coder, ux)");
   print_string("4. Starts chat room with targeted messaging and discuss mode");
   print_string("");
@@ -1395,9 +1255,9 @@ effect[Network, FileSystem, Secret, Log, Time, TTY, Random] function main() -> U
     True -> usage(),
     False -> {
       let runtime_arg = opt_str(positional(args, 0), "");
-      let runtime_url = normalize_runtime_url(runtime_arg);
+      let runtime_url = normalize_runtime_url_cli(runtime_arg);
       let token_flag = trim(flag_or(args, "token", ""));
-      let use_tty_select = has_flag(args, "tty-select");
+      let use_tty_select = has_flag(args, "tty-select") or bool_not(has_flag(args, "no-tty-select"));
       let token = match string_length(token_flag) > 0 {
         True -> token_flag,
         False -> match get_secret("CLARITY_RUNTIME_TOKEN") {

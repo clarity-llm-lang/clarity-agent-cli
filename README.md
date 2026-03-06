@@ -36,11 +36,12 @@ Use `claritycli` for the streamlined chat UX:
 `claritycli` accepts:
 
 ```bash
-claritycli [runtime-url] [--token <secret>] [--tty-select]
+claritycli [runtime-url] [--token <secret>] [--no-tty-select]
 ```
 
-- Default selection UX is numeric prompt (stable across terminals).
-- Optional: `--tty-select` enables arrow-key selection when terminal key stream is reliable.
+- Arrow-key selection is enabled by default when running in a TTY, with automatic numeric fallback if raw key input is unavailable.
+- Use `--no-tty-select` to force numeric selection.
+- Runtime auth token precedence: `--token` -> `CLARITY_RUNTIME_TOKEN` -> disabled.
 
 ## Install and run
 
@@ -90,14 +91,14 @@ Notes:
 ## CLI commands
 
 ```bash
-clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
+clarity-agent runtime-chat [runtime-url] [service-id] [--agent <agent-id>] [--run-id <run-id>] [--resume-latest] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]
 clarity-agent runtime-agents [runtime-url] [--token <secret>]
 clarity-agent connect [broker-url] [--token <secret>] [--poll-ms <ms>] [--timeout <secs>] [--auto-approve]
 clarity-agent watch [dir] [--dir <path>] [--timeout <secs>] [--auto-approve] [--log <file>] [--poll-ms <ms>]
 clarity-agent list [dir] [--dir <path>]
 clarity-agent answer <key> <response> [--dir <path>]
 clarity-agent cancel <key> [dir] [--dir <path>]
-clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
+clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>] [--allow-query-token]
 ```
 
 ## Runtime chat flow
@@ -108,6 +109,23 @@ clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
 4. Bootstrap run (`agent.run_created`, `agent.run_started`) unless `--run-id` is provided.
 5. Chat via `POST /api/agents/runs/:runId/messages`.
 6. Receive events by SSE (`/api/agents/runs/:runId/events/stream`) with polling fallback.
+
+## Token handling
+
+- Runtime commands (`runtime-chat`, `runtime-agents`, `claritycli`) resolve tokens with:
+  1. `--token <secret>`
+  2. `CLARITY_RUNTIME_TOKEN`
+  3. empty token
+- Broker commands (`connect`, `serve`) resolve tokens with:
+  1. `--token <secret>`
+  2. `CLARITY_HITL_BROKER_TOKEN`
+  3. empty token
+
+## Broker security profile
+
+- `serve` authenticates with `Authorization: Bearer <token>` when a token is configured.
+- Query-string token auth is disabled by default and only enabled with `--allow-query-token`.
+- For non-local deployments, put broker traffic behind TLS and network policy controls.
 
 ## Project structure
 
@@ -131,7 +149,7 @@ clarity-agent serve [dir] [--dir <path>] [--port <port>] [--token <secret>]
 |-- tests/
 |   `-- cli.test.mjs
 `-- scripts/
-    `-- check-no-typescript.mjs
+    `-- check-pure-clarity.sh
 ```
 
 ## Quality gates
@@ -147,4 +165,4 @@ npm run test
 - `runtime-chat` is fully Clarity-native.
 - `claritycli` is fully Clarity-native (`clarity/claritycli.clarity` -> `dist/claritycli.cjs`).
 - Distribution is generated with `clarityc pack` into `dist/clarity-agent.cjs` from `clarity/main.clarity`.
-- Lint enforces Clarity-only implementation files under `clarity/`, `src/`, and `bin/`.
+- Lint enforces Clarity-first implementation policy for this repository.
