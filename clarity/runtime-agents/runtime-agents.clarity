@@ -118,14 +118,25 @@ effect[Log] function print_rows(items_json: String, idx: Int64) -> Unit {
   }
 }
 
-export effect[Network, FileSystem, Log] function run_runtime_agents(args: List<String>) -> Unit {
+effect[Secret] function resolve_runtime_token(args: List<String>) -> String {
+  let flag_token = trim(flag_or(args, "token", ""));
+  match string_length(flag_token) > 0 {
+    True -> flag_token,
+    False -> match get_secret("CLARITY_RUNTIME_TOKEN") {
+      Some(v) -> trim(v),
+      None -> ""
+    }
+  }
+}
+
+export effect[Network, FileSystem, Secret, Log] function run_runtime_agents(args: List<String>) -> Unit {
   let runtime_arg = opt_str(positional(args, 0), "");
   let runtime_raw = match string_length(trim(runtime_arg)) > 0 {
     True -> runtime_arg,
     False -> prompt_required("runtime url> ")
   };
   let runtime_url = normalize_runtime_url(runtime_raw);
-  let token = trim(flag_or(args, "token", ""));
+  let token = resolve_runtime_token(args);
   let url = runtime_url ++ "/api/agents/registry";
 
   match request_full_checked("GET", url, auth_headers(token), "") {

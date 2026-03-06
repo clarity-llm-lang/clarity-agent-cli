@@ -1,10 +1,32 @@
 module RuntimeChat
 
 import { flag_or, flag_int_or, positional, has_flag } from "std/cli"
-import { get, get_or, get_nested, arr_get, arr_len, escape } from "std/json"
+import { get, get_or, get_nested, arr_get, arr_len } from "std/json"
 import { poll, MuxEvent } from "std/mux"
 import { connect_headers, close } from "std/sse"
-import { encode, query_pair, query_string } from "std/url"
+import {
+  opt_str,
+  parse_int_or,
+  clamp,
+  max_i64,
+  bool_not,
+  normalize_runtime_url,
+  auth_headers,
+  json_headers,
+  request_full_checked,
+  registry_url,
+  run_summaries_url,
+  run_events_url,
+  run_events_stream_url,
+  run_messages_url,
+  agents_events_url,
+  run_created_payload,
+  run_started_payload,
+  user_message_payload,
+  event_items_json,
+  event_message,
+  is_terminal_kind
+} from "../runtime-shared/runtime-shared"
 
 type SelectedAgent = {
   serviceId: String,
@@ -31,114 +53,12 @@ type ChatContext = {
 
 function noop_rtchat() -> Unit {}
 
-function bool_not(value: Bool) -> Bool {
-  match value {
-    True -> False,
-    False -> True
-  }
-}
-
-function opt_str(value: Option<String>, fallback: String) -> String {
-  match value {
-    Some(v) -> v,
-    None -> fallback
-  }
-}
-
-function parse_int_or(text: String, fallback: Int64) -> Int64 {
-  match string_to_int(text) {
-    Some(v) -> v,
-    None -> fallback
-  }
-}
-
-function max_i64_local(a: Int64, b: Int64) -> Int64 {
-  match a >= b {
-    True -> a,
-    False -> b
-  }
-}
-
-function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
-  match value < min_v {
-    True -> min_v,
-    False -> match value > max_v {
-      True -> max_v,
-      False -> value
-    }
-  }
-}
-
-function strip_trailing_slash(url: String) -> String {
-  let trimmed = trim(url);
-  match string_length(trimmed) == 0 {
-    True -> trimmed,
-    False -> match string_ends_with(trimmed, "/") {
-      True -> strip_trailing_slash(substring(trimmed, 0, string_length(trimmed) - 1)),
-      False -> trimmed
-    }
-  }
-}
-
-function normalize_runtime_url(raw: String) -> String {
-  let trimmed = strip_trailing_slash(raw);
-  match string_starts_with(trimmed, "http://") {
-    True -> trimmed,
-    False -> match string_starts_with(trimmed, "https://") {
-      True -> trimmed,
-      False -> "http://" ++ trimmed
-    }
-  }
-}
-
-function quote_json(value: String) -> String {
-  "\"" ++ escape(value) ++ "\""
-}
-
-function auth_headers(token: String) -> String {
-  let t = trim(token);
-  match string_length(t) == 0 {
-    True -> "{}",
-    False -> "{\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
-  }
-}
-
-function json_headers(token: String) -> String {
-  let t = trim(token);
-  match string_length(t) == 0 {
-    True -> "{\"Content-Type\":\"application/json\"}",
-    False -> "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
-  }
-}
-
-function is_http_success(status: Int64) -> Bool {
-  status >= 200 and status <= 299
-}
-
 function is_operator_input_kind(kind: String) -> Bool {
   kind == "agent.hitl_input" or kind == "agent.human_message" or kind == "agent.chat.user_message"
 }
 
-function is_terminal_kind(kind: String) -> Bool {
-  kind == "agent.run_completed" or kind == "agent.run_failed" or kind == "agent.run_cancelled"
-}
-
 function parse_seq(event_json: String) -> Int64 {
   parse_int_or(opt_str(get(event_json, "seq"), "0"), 0)
-}
-
-function event_message(event_json: String) -> String {
-  let a = opt_str(get_nested(event_json, "data.message"), "");
-  match string_length(a) > 0 {
-    True -> a,
-    False -> {
-      let b = opt_str(get_nested(event_json, "data.text"), "");
-      match string_length(b) > 0 {
-        True -> b,
-        False -> get_or(event_json, "message", "")
-      }
-    }
-  }
 }
 
 function event_agent(event_json: String, default_agent: String) -> String {
@@ -167,81 +87,33 @@ function extract_agent(item_json: String) -> SelectedAgent {
   }
 }
 
-function trigger_context_json(run_id: String) -> String {
-  "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":" ++ quote_json(run_id) ++ ",\"caller\":\"clarity-agent-cli\"}"
+function is_terminal_status(status: String) -> Bool {
+  status == "completed" or status == "failed" or status == "cancelled"
 }
 
-function run_created_payload(service_id: String, agent: String, run_id: String) -> String {
-  let ctx = trigger_context_json(run_id);
-  "{"
-    ++ "\"kind\":\"agent.run_created\","
-    ++ "\"level\":\"info\","
-    ++ "\"message\":" ++ quote_json("agent.run_created (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent) ++ ","
-    ++ "\"data\":{"
-      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
-      ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":\"api\","
-      ++ "\"triggerContext\":" ++ ctx ++ ","
-      ++ "\"route\":\"/cli/runtime-chat\","
-      ++ "\"method\":\"CLI\","
-      ++ "\"requestId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"caller\":\"clarity-agent-cli\""
-    ++ "}"
-  ++ "}"
-}
-
-function run_started_payload(service_id: String, agent: String, run_id: String) -> String {
-  let ctx = trigger_context_json(run_id);
-  "{"
-    ++ "\"kind\":\"agent.run_started\","
-    ++ "\"level\":\"info\","
-    ++ "\"message\":" ++ quote_json("agent.run_started (" ++ run_id ++ ")") ++ ","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent) ++ ","
-    ++ "\"data\":{"
-      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
-      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
-      ++ "\"agent\":" ++ quote_json(agent) ++ ","
-      ++ "\"trigger\":\"api\","
-      ++ "\"triggerContext\":" ++ ctx
-    ++ "}"
-  ++ "}"
-}
-
-function user_message_payload(service_id: String, agent: String, message: String) -> String {
-  "{"
-    ++ "\"message\":" ++ quote_json(message) ++ ","
-    ++ "\"role\":\"user\","
-    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
-    ++ "\"agent\":" ++ quote_json(agent)
-  ++ "}"
-}
-
-function registry_url(base: String) -> String {
-  base ++ "/api/agents/registry"
-}
-
-function run_events_url(base: String, run_id: String, limit: Int64) -> String {
-  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
-  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events?" ++ qs
-}
-
-function run_events_stream_url(base: String, run_id: String, limit: Int64) -> String {
-  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
-  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events/stream?" ++ qs
-}
-
-function run_messages_url(base: String, run_id: String) -> String {
-  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/messages"
-}
-
-function agents_events_url(base: String) -> String {
-  base ++ "/api/agents/events"
+function find_latest_active_run(
+  items_json: String,
+  idx: Int64,
+  service_id: String,
+  agent: String
+) -> Option<String> {
+  let count = arr_len(items_json);
+  match idx >= count {
+    True -> None,
+    False -> match arr_get(items_json, idx) {
+      None -> find_latest_active_run(items_json, idx + 1, service_id, agent),
+      Some(item_json) -> {
+        let run_id = trim(get_or(item_json, "runId", ""));
+        let row_service_id = trim(get_or(item_json, "serviceId", ""));
+        let row_agent = trim(get_or(item_json, "agent", ""));
+        let status = trim(get_or(item_json, "status", ""));
+        match string_length(run_id) > 0 and row_service_id == service_id and row_agent == agent and bool_not(is_terminal_status(status)) {
+          True -> Some(run_id),
+          False -> find_latest_active_run(items_json, idx + 1, service_id, agent)
+        }
+      }
+    }
+  }
 }
 
 effect[FileSystem, Log] function prompt_required(prompt: String) -> String {
@@ -256,29 +128,13 @@ effect[FileSystem, Log] function prompt_required(prompt: String) -> String {
   }
 }
 
-effect[FileSystem, Log] function prompt_optional(prompt: String) -> String {
-  print_string(prompt);
-  trim(read_line())
-}
-
-effect[Network] function request_full_checked(
-  method: String,
-  url: String,
-  headers_json: String,
-  body: String
-) -> Result<String, String> {
-  match http_request_full(method, url, headers_json, body) {
-    Err(msg) -> Err(msg),
-    Ok(payload) -> {
-      let status_text = get_or(payload, "status", "0");
-      let response_body = get_or(payload, "body", "");
-      match string_to_int(status_text) {
-        None -> Err(method ++ " " ++ url ++ " returned malformed status"),
-        Some(status) -> match is_http_success(status) {
-          True -> Ok(response_body),
-          False -> Err(method ++ " " ++ url ++ " failed (" ++ status_text ++ "): " ++ response_body)
-        }
-      }
+effect[Secret] function resolve_runtime_token(args: List<String>) -> String {
+  let flag_token = trim(flag_or(args, "token", ""));
+  match string_length(flag_token) > 0 {
+    True -> flag_token,
+    False -> match get_secret("CLARITY_RUNTIME_TOKEN") {
+      Some(v) -> trim(v),
+      None -> ""
     }
   }
 }
@@ -287,19 +143,31 @@ effect[Network] function fetch_registry(base: String, token: String) -> Result<S
   request_full_checked("GET", registry_url(base), auth_headers(token), "")
 }
 
+effect[Network] function fetch_latest_active_run(
+  base: String,
+  token: String,
+  service_id: String,
+  agent: String
+) -> Option<String> {
+  match request_full_checked("GET", run_summaries_url(base, 200), auth_headers(token), "") {
+    Err(_) -> None,
+    Ok(body) -> find_latest_active_run(get_or(body, "items", "[]"), 0, service_id, agent)
+  }
+}
+
 effect[Network] function bootstrap_run(ctx: ChatContext) -> Result<String, String> {
   match request_full_checked(
     "POST",
     agents_events_url(ctx.runtimeUrl),
     json_headers(ctx.token),
-    run_created_payload(ctx.serviceId, ctx.agent, ctx.runId)
+    run_created_payload(ctx.serviceId, ctx.agent, ctx.runId, "api", "clarity-agent-cli")
   ) {
     Err(msg) -> Err(msg),
     Ok(_) -> request_full_checked(
       "POST",
       agents_events_url(ctx.runtimeUrl),
       json_headers(ctx.token),
-      run_started_payload(ctx.serviceId, ctx.agent, ctx.runId)
+      run_started_payload(ctx.serviceId, ctx.agent, ctx.runId, "api", "clarity-agent-cli")
     )
   }
 }
@@ -420,7 +288,7 @@ effect[Log] function apply_event(event_json: String, last_seq: Int64, default_ag
   };
   let kind = get_or(event_json, "kind", "event");
   {
-    nextSeq: max_i64_local(last_seq, seq),
+    nextSeq: max_i64(last_seq, seq),
     sawOutput: is_new and bool_not(is_operator_input_kind(kind)),
     terminal: is_new and is_terminal_kind(kind)
   }
@@ -428,7 +296,7 @@ effect[Log] function apply_event(event_json: String, last_seq: Int64, default_ag
 
 function merge_state(a: PollState, b: PollState) -> PollState {
   {
-    nextSeq: max_i64_local(a.nextSeq, b.nextSeq),
+    nextSeq: max_i64(a.nextSeq, b.nextSeq),
     sawOutput: a.sawOutput or b.sawOutput,
     terminal: a.terminal or b.terminal
   }
@@ -467,7 +335,7 @@ effect[Network, Log] function flush_events(ctx: ChatContext, last_seq: Int64) ->
       }
     },
     Ok(body) -> {
-      let items_json = get_or(body, "items", "[]");
+      let items_json = event_items_json(body);
       scan_events(
         items_json,
         0,
@@ -629,7 +497,7 @@ effect[Network, FileSystem, Log, Time] function start_chat(ctx: ChatContext, las
   }
 }
 
-export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: List<String>) -> Unit {
+export effect[Network, FileSystem, Secret, Log, Time] function run_runtime_chat(args: List<String>) -> Unit {
 
   let runtime_arg = opt_str(positional(args, 0), "");
   let service_arg = opt_str(positional(args, 1), "");
@@ -641,11 +509,7 @@ export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: Li
 
   let runtime_url = normalize_runtime_url(runtime_input);
 
-  let token_flag = trim(flag_or(args, "token", ""));
-  let token = match string_length(token_flag) > 0 {
-    True -> token_flag,
-    False -> prompt_optional("token (optional)> ")
-  };
+  let token = resolve_runtime_token(args);
 
   let poll_ms = clamp(100, 5000, flag_int_or(args, "poll-ms", 1200));
   let events_limit = clamp(1, 5000, flag_int_or(args, "events-limit", 200));
@@ -653,6 +517,7 @@ export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: Li
 
   let run_id_flag = trim(flag_or(args, "run-id", ""));
   let agent_override = trim(flag_or(args, "agent", ""));
+  let resume_latest = has_flag(args, "resume-latest");
 
   match fetch_registry(runtime_url, token) {
     Err(msg) -> {
@@ -686,12 +551,24 @@ export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: Li
                 }
               };
 
-              let run_id = match string_length(run_id_flag) > 0 {
-                True -> run_id_flag,
-                False -> "run_cli_" ++ int_to_string(timestamp_to_int(now()))
+              let resumed_run = match string_length(run_id_flag) == 0 and resume_latest {
+                True -> fetch_latest_active_run(runtime_url, token, selected.serviceId, agent),
+                False -> None
               };
 
-              let attached = string_length(run_id_flag) > 0;
+              let run_id = match string_length(run_id_flag) > 0 {
+                True -> run_id_flag,
+                False -> match resumed_run {
+                  Some(existing_run) -> existing_run,
+                  None -> "run_cli_" ++ int_to_string(timestamp_to_int(now()))
+                }
+              };
+
+              let resumed = match resumed_run {
+                Some(_) -> True,
+                None -> False
+              };
+              let attached = string_length(run_id_flag) > 0 or resumed;
               let ctx = {
                 runtimeUrl: runtime_url,
                 token: token,
@@ -704,7 +581,10 @@ export effect[Network, FileSystem, Log, Time] function run_runtime_chat(args: Li
               };
 
               match attached {
-                True -> print_string("Attached to run: " ++ run_id),
+                True -> match resumed {
+                  True -> print_string("Resumed run: " ++ run_id),
+                  False -> print_string("Attached to run: " ++ run_id)
+                },
                 False -> match bootstrap_run(ctx) {
                   Err(msg) -> {
                     print_string("Failed to bootstrap run: " ++ msg);

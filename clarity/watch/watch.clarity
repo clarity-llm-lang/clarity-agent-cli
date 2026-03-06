@@ -81,6 +81,32 @@ function list_contains(values: List<String>, target: String) -> Bool {
   }
 }
 
+function list_len<T>(values: List<T>) -> Int64 {
+  match is_empty(values) {
+    True -> 0,
+    False -> 1 + list_len(tail(values))
+  }
+}
+
+function drop_first<T>(values: List<T>, n: Int64) -> List<T> {
+  match n <= 0 or is_empty(values) {
+    True -> values,
+    False -> drop_first(tail(values), n - 1)
+  }
+}
+
+function trim_to_last<T>(values: List<T>, limit: Int64) -> List<T> {
+  let size = list_len(values);
+  match size <= limit {
+    True -> values,
+    False -> drop_first(values, size - limit)
+  }
+}
+
+function append_marker_bounded(markers: List<String>, marker: String) -> List<String> {
+  trim_to_last(append(markers, marker), 5000)
+}
+
 effect[FileSystem, Log] function prompt_optional(prompt: String) -> String {
   print_string(prompt);
   trim(read_line())
@@ -159,7 +185,7 @@ effect[FileSystem, Log, Time] function process_file(
                     True -> append_log(log_file, msg),
                     False -> noop_watch()
                   };
-                  { markers: append(state.markers, marker) }
+                  { markers: append_marker_bounded(state.markers, marker) }
                 },
                 False -> {
                   print_string("");
@@ -180,7 +206,7 @@ effect[FileSystem, Log, Time] function process_file(
                     True -> append_log(log_file, msg),
                     False -> noop_watch()
                   };
-                  { markers: append(state.markers, marker) }
+                  { markers: append_marker_bounded(state.markers, marker) }
                 }
               }
             }

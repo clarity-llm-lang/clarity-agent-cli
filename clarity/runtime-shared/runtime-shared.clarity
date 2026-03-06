@@ -1,0 +1,237 @@
+module RuntimeShared
+
+import { get_or, get_nested_or, escape } from "std/json"
+import { encode, query_pair, query_string } from "std/url"
+
+export function opt_str(value: Option<String>, fallback: String) -> String {
+  match value {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+export function parse_int_or(text: String, fallback: Int64) -> Int64 {
+  match string_to_int(text) {
+    Some(v) -> v,
+    None -> fallback
+  }
+}
+
+export function clamp(min_v: Int64, max_v: Int64, value: Int64) -> Int64 {
+  match value < min_v {
+    True -> min_v,
+    False -> match value > max_v {
+      True -> max_v,
+      False -> value
+    }
+  }
+}
+
+export function max_i64(a: Int64, b: Int64) -> Int64 {
+  match a >= b {
+    True -> a,
+    False -> b
+  }
+}
+
+export function bool_not(value: Bool) -> Bool {
+  match value {
+    True -> False,
+    False -> True
+  }
+}
+
+function strip_trailing_slash(url: String) -> String {
+  let trimmed = trim(url);
+  match string_length(trimmed) == 0 {
+    True -> trimmed,
+    False -> match string_ends_with(trimmed, "/") {
+      True -> strip_trailing_slash(substring(trimmed, 0, string_length(trimmed) - 1)),
+      False -> trimmed
+    }
+  }
+}
+
+export function normalize_runtime_url(raw: String) -> String {
+  let trimmed = strip_trailing_slash(raw);
+  match string_length(trimmed) == 0 {
+    True -> trimmed,
+    False -> match string_starts_with(trimmed, "http://") {
+      True -> trimmed,
+      False -> match string_starts_with(trimmed, "https://") {
+        True -> trimmed,
+        False -> "http://" ++ trimmed
+      }
+    }
+  }
+}
+
+function quote_json(value: String) -> String {
+  "\"" ++ escape(value) ++ "\""
+}
+
+export function auth_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{}",
+    False -> "{\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
+  }
+}
+
+export function json_headers(token: String) -> String {
+  let t = trim(token);
+  match string_length(t) == 0 {
+    True -> "{\"Content-Type\":\"application/json\"}",
+    False -> "{\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer " ++ escape(t) ++ "\"}"
+  }
+}
+
+function is_http_success(status: Int64) -> Bool {
+  status >= 200 and status <= 299
+}
+
+export effect[Network] function request_full_checked(
+  method: String,
+  url: String,
+  headers_json: String,
+  body: String
+) -> Result<String, String> {
+  match http_request_full(method, url, headers_json, body) {
+    Err(msg) -> Err(msg),
+    Ok(payload) -> {
+      let status_text = get_or(payload, "status", "0");
+      let response_body = get_or(payload, "body", "");
+      match string_to_int(status_text) {
+        None -> Err(method ++ " " ++ url ++ " returned malformed status"),
+        Some(status) -> match is_http_success(status) {
+          True -> Ok(response_body),
+          False -> Err(method ++ " " ++ url ++ " failed (" ++ status_text ++ "): " ++ response_body)
+        }
+      }
+    }
+  }
+}
+
+export function registry_url(base: String) -> String {
+  base ++ "/api/agents/registry"
+}
+
+export function run_summaries_url(base: String, limit: Int64) -> String {
+  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
+  base ++ "/api/agents/runs?" ++ qs
+}
+
+export function run_events_url(base: String, run_id: String, limit: Int64) -> String {
+  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events?" ++ qs
+}
+
+export function run_events_stream_url(base: String, run_id: String, limit: Int64) -> String {
+  let qs = query_string(append([], query_pair("limit", int_to_string(limit))));
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/events/stream?" ++ qs
+}
+
+export function run_messages_url(base: String, run_id: String) -> String {
+  base ++ "/api/agents/runs/" ++ encode(run_id) ++ "/messages"
+}
+
+export function agents_events_url(base: String) -> String {
+  base ++ "/api/agents/events"
+}
+
+export function event_items_json(body: String) -> String {
+  let trimmed = trim(body);
+  match string_starts_with(trimmed, "[") {
+    True -> trimmed,
+    False -> get_or(body, "items", "[]")
+  }
+}
+
+function trigger_context_json(run_id: String, caller: String) -> String {
+  "{\"route\":\"/cli/runtime-chat\",\"method\":\"CLI\",\"requestId\":"
+    ++ quote_json(run_id)
+    ++ ",\"caller\":"
+    ++ quote_json(caller)
+    ++ "}"
+}
+
+export function run_created_payload(
+  service_id: String,
+  agent: String,
+  run_id: String,
+  trigger: String,
+  caller: String
+) -> String {
+  let ctx = trigger_context_json(run_id, caller);
+  "{"
+    ++ "\"kind\":\"agent.run_created\","
+    ++ "\"level\":\"info\","
+    ++ "\"message\":" ++ quote_json("agent.run_created (" ++ run_id ++ ")") ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
+    ++ "\"data\":{"
+      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
+      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
+      ++ "\"triggerContext\":" ++ ctx ++ ","
+      ++ "\"route\":\"/cli/runtime-chat\","
+      ++ "\"method\":\"CLI\","
+      ++ "\"requestId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"caller\":" ++ quote_json(caller)
+    ++ "}"
+  ++ "}"
+}
+
+export function run_started_payload(
+  service_id: String,
+  agent: String,
+  run_id: String,
+  trigger: String,
+  caller: String
+) -> String {
+  let ctx = trigger_context_json(run_id, caller);
+  "{"
+    ++ "\"kind\":\"agent.run_started\","
+    ++ "\"level\":\"info\","
+    ++ "\"message\":" ++ quote_json("agent.run_started (" ++ run_id ++ ")") ++ ","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"run_id\":" ++ quote_json(run_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent) ++ ","
+    ++ "\"data\":{"
+      ++ "\"runId\":" ++ quote_json(run_id) ++ ","
+      ++ "\"serviceId\":" ++ quote_json(service_id) ++ ","
+      ++ "\"agent\":" ++ quote_json(agent) ++ ","
+      ++ "\"trigger\":" ++ quote_json(trigger) ++ ","
+      ++ "\"triggerContext\":" ++ ctx
+    ++ "}"
+  ++ "}"
+}
+
+export function user_message_payload(service_id: String, agent: String, message: String) -> String {
+  "{"
+    ++ "\"message\":" ++ quote_json(message) ++ ","
+    ++ "\"role\":\"user\","
+    ++ "\"service_id\":" ++ quote_json(service_id) ++ ","
+    ++ "\"agent\":" ++ quote_json(agent)
+  ++ "}"
+}
+
+export function event_message(event_json: String) -> String {
+  let a = get_nested_or(event_json, "data.message", "");
+  match string_length(a) > 0 {
+    True -> a,
+    False -> {
+      let b = get_nested_or(event_json, "data.text", "");
+      match string_length(b) > 0 {
+        True -> b,
+        False -> get_or(event_json, "message", "")
+      }
+    }
+  }
+}
+
+export function is_terminal_kind(kind: String) -> Bool {
+  kind == "agent.run_completed" or kind == "agent.run_failed" or kind == "agent.run_cancelled"
+}

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "CLI and broker interface for Human-in-the-Loop workflows across Clarity agents",
+  "license": "MIT",
   "scripts": {
     "build": "npm run build:cli",
     "build:cli": "rm -rf dist && mkdir -p dist && clarityc pack clarity/main.clarity -f main -o dist/clarity-agent.cjs && clarityc pack clarity/claritycli.clarity -f main -o dist/claritycli.cjs && chmod +x dist/clarity-agent.cjs dist/claritycli.cjs",
@@ -24,7 +25,7 @@
     "claritycli": "dist/claritycli.cjs"
   },
   "dependencies": {
-    "clarity-lang": "github:clarity-llm-lang/clarity-compiler#main"
+    "clarity-lang": "https://codeload.github.com/clarity-llm-lang/clarity-compiler/tar.gz/main"
   },
   "devDependencies": {
     "prettier": "^3.5.3"

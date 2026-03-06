@@ -18,6 +18,8 @@
   - Boots run events when needed
   - Sends chat messages to run-scoped endpoint
   - Consumes SSE stream with poll fallback
+- `clarity/runtime-shared/runtime-shared.clarity`
+  - Shared runtime URL/auth/payload/request helpers used by `runtime-chat` and `claritycli`
 - `clarity/runtime-agents/runtime-agents.clarity`
   - Lists agent services from `/api/agents/registry`
 - `clarity/connect/connect.clarity`
@@ -34,6 +36,7 @@
 - `clarity/serve/serve.clarity`
   - Hosts broker HTTP API (`/questions`, `/questions/:key`, `/answer`, `/cancel`, `/events`)
   - Optional bearer token auth (`--token`)
+  - Query-token auth disabled by default; explicit opt-in via `--allow-query-token`
   - Emits broker SSE events for `new_question` and `answered`
 
 ## Compatibility status
@@ -46,7 +49,7 @@ Supported:
 - local file-protocol watch/list/cancel flow
 - embedded broker HTTP server via native Clarity `serve`
 
-Gap requirements are tracked in `docs/clarity-language-gap-requirements.md`.
+Gap requirements are tracked in `docs/clarity-language-gap-requirements.md` and the shared registry `../LLM-lang/docs/runtime-cli-language-requirements.md`.
 
 ## Validation
 

@@ -1,8 +1,8 @@
-# clarity-hitl-broker — Requirements & Protocol Specification
+# HITL Broker — Requirements & Protocol Specification
 
-This document defines the requirements for the `clarity-hitl-broker` project —
-a standalone tool (CLI + optional web UI) that acts as the operator-facing
-interface for the Clarity `HumanInLoop` effect.
+This document defines requirements for the broker functionality shipped in
+`clarity-agent-cli` (`watch`, `connect`, `serve`) and any compatible external
+operator UI that integrates with the Clarity `HumanInLoop` effect.
 
 ## Purpose
 
@@ -11,7 +11,7 @@ When a Clarity agent calls `hitl_ask(key, question)` the runtime writes a
 handshake directory and presents pending questions to a human operator through a
 comfortable interface.
 
-The broker is intentionally a **separate project** so it can be:
+The broker interface is intentionally **decoupled** so it can be:
 
 - Deployed independently from the agent runtime
 - Replaced with a custom UI (Slack bot, web dashboard, mobile app)
@@ -58,14 +58,14 @@ return answer string
 
 ---
 
-## CLI requirements (`clarity-hitl`)
+## CLI requirements (`clarity-agent`)
 
 ### Installation
 
-```
-npm install -g clarity-hitl-broker
+```bash
+npm install -g clarity-agent-cli
 # or
-npx clarity-hitl-broker watch
+npx clarity-agent watch
 ```
 
 ### Commands
@@ -110,7 +110,7 @@ review-step-3        00:02:14  Does this summary look correct?
 Programmatically write an answer file. Useful for scripting or testing.
 
 ```
-clarity-hitl answer review-step-3 "Looks good, proceed"
+clarity-agent answer review-step-3 "Looks good, proceed"
 ```
 
 #### `cancel <key>`
@@ -134,7 +134,7 @@ A simple single-page app served locally (or hostable) that:
 4. **Sends** the response via `POST /answer` → broker writes the `.answer` file.
 5. **Shows** a history of completed interactions in the session.
 
-### Broker HTTP API (served by `clarity-hitl-broker serve`)
+### Broker HTTP API (served by `clarity-agent serve`)
 
 ```
 GET  /questions              — list pending questions (JSON array)
@@ -144,7 +144,8 @@ POST /cancel                 — { key: string } → deletes question file
 ```
 
 **Port:** configurable via `--port` (default 7842).
-**Auth:** `--token <secret>` header check (optional; off by default for local use).
+**Auth:** `--token <secret>` enables bearer auth via `Authorization: Bearer <token>`.
+Query-token auth is disabled by default and can be explicitly enabled with `--allow-query-token`.
 
 ---
 
@@ -174,20 +175,22 @@ laptop).
 
 ---
 
-## Repository structure (clarity-hitl-broker)
+## Repository structure (`clarity-agent-cli`, Clarity-native)
 
 ```
-clarity-hitl-broker/
+clarity-agent-cli/
 ├── package.json
-├── src/
-│   ├── cli.ts          — CLI entrypoint (watch, list, answer, cancel)
-│   ├── watcher.ts      — fs.watch loop for question files
-│   ├── server.ts       — Express server for web UI + HTTP API
-│   ├── ui/             — React or vanilla JS single-page app
-│   └── audit.ts        — JSONL audit log writer
+├── clarity/
+│   ├── main.clarity           — CLI router entrypoint
+│   ├── watch/watch.clarity    — watch loop for local question files
+│   ├── list/list.clarity      — pending question listing
+│   ├── answer/answer.clarity  — writes `.answer` files
+│   ├── cancel/cancel.clarity  — removes `.question` files
+│   ├── connect/connect.clarity — remote broker connect loop
+│   └── serve/serve.clarity    — broker HTTP API + SSE server
 ├── README.md
 └── docs/
-    └── protocol.md     — This spec (copy or symlink)
+    └── hitl-broker-spec.md
 ```
 
 ---

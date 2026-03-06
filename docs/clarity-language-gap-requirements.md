@@ -48,6 +48,7 @@ Architecture: Worker runs `http.createServer()`; worker→main via SAB+Atomics (
 ~~Need terminal input primitives for interactive key-based UX.~~
 
 **Implemented (2026-03-04):** New `TTY` effect added to the effect system. Raw terminal builtins:
+
 - `tty_is_tty() -> Bool` — pure, no effect needed. Returns True if stdout is a real TTY.
 - `tty_enter_raw() -> Unit` / `tty_exit_raw() -> Unit` — enable/disable raw (char-at-a-time) stdin mode. No-op in non-TTY environments.
 - `tty_read_key(timeout_ms: Int64) -> Option<String>` — blocks up to `timeout_ms` ms. Returns `Some(key)` with normalized codes: `"up"`, `"down"`, `"left"`, `"right"`, `"enter"`, `"space"`, `"backspace"`, `"escape"`, `"ctrl+c"`, `"ctrl+d"`, or a single printable character. Returns `None` on timeout or EOF.
@@ -59,6 +60,7 @@ All require `effect[TTY]` (except `tty_is_tty`). Implementation uses a persisten
 ~~Need terminal output helpers for in-place UI updates.~~
 
 **Implemented (2026-03-04):** Cursor and line-control builtins (all require `effect[TTY]`):
+
 - `tty_cursor_up(n: Int64) -> Unit` / `tty_cursor_down(n: Int64) -> Unit` — ANSI cursor movement.
 - `tty_cursor_to_col(col: Int64) -> Unit` — move to column (1-based).
 - `tty_clear_line() -> Unit` — clear current line (`\x1b[2K\r`).
@@ -88,6 +90,7 @@ Acceptance criteria:
 ~~Need a standard primitive/pattern to consume events from multiple run streams in one loop.~~
 
 **Implemented (2026-03-04):** Five new `mux_*` builtins for N-stream SSE fan-in (require `effect[Network]` except `mux_open`):
+
 - `mux_open() -> Int64` — create a multiplexer, returns a handle.
 - `mux_add(handle: Int64, stream_id: String, url: String, headers_json: String) -> Unit` — connect an SSE stream to the mux.
 - `mux_next(handle: Int64, timeout_ms: Int64) -> Option<String>` — block until any stream delivers an event. Returns `Some(event_json)` with fields `id` (stream_id), `event` (data), `ended` (bool), `error` (string). Returns `None` on timeout.
@@ -107,6 +110,7 @@ Architecture: single mux worker manages N concurrent HTTP GET + SSE connections 
 ~~Need a stable install path for `clarity-lang` when consumed as a git dependency.~~
 
 **Implemented (2026-03-04):**
+
 - `dist/` removed from `.gitignore` and committed to the repository.
 - Pre-built `dist/index.js` (the `clarityc` binary) is now tracked in git, so `npm ci` in `LLM-cli` yields a working `clarityc` in `node_modules/.bin` without needing `prepare` to run.
 - Pre-existing TypeScript error in `codegen.ts` (Option case accessing `type.variants` instead of `type.inner`) that was causing `tsc` / `prepare` to fail has been fixed.
@@ -117,6 +121,7 @@ Architecture: single mux worker manages N concurrent HTTP GET + SSE connections 
 ~~Need optional fs-watch event primitive.~~
 
 **Implemented (2026-03-04):** Three new `fs_watch_*` builtins (all require `FileSystem` effect):
+
 - `fs_watch_start(path: String) -> Result<Int64, String>` — start watching a file or directory; returns `Ok(handle)` on success or `Err(message)` if the path cannot be watched. Uses `fs.watch({ recursive: true })` — OS-level APIs (FSEvents on macOS, inotify on Linux) with automatic polling fallback where native APIs are unavailable.
 - `fs_watch_next(handle: Int64, timeout_ms: Int64) -> Option<String>` — block until a change event arrives or `timeout_ms` elapses. Returns `Some(event_json)` where event_json is `{"event":"change"|"rename","filename":"relative/path"}`, or `None` on timeout.
 - `fs_watch_stop(handle: Int64) -> Unit` — stop watching and release the handle.
@@ -144,7 +149,7 @@ All previously blocked commands are now unblocked:
 Known caveat:
 
 - `claritycli` includes automatic fallback from arrow-key selection to numeric selection when TTY key delivery is unavailable (see RQ-LANG-CLI-TTY-003).
-- `claritycli` defaults to numeric selection; arrow-key mode is opt-in via `--tty-select` until RQ-LANG-CLI-TTY-003 is resolved.
+- `claritycli` now defaults to arrow-key selection in TTY mode, with automatic numeric fallback (and explicit `--no-tty-select`) while RQ-LANG-CLI-TTY-003 remains in progress.
 
 ## Backlog item
 
@@ -171,3 +176,32 @@ Known caveat:
 - Backlog ID: `LANG-CLI-TTY-003`
 - Priority: `P1`
 - Item: Implement RQ-LANG-CLI-TTY-003 so interactive arrow-key selection is stable without fallback on macOS interactive terminals.
+
+## Cross-Project Audit Intake (2026-03-06)
+
+This section records non-language parity findings that still block production-quality operator experience for `LLM-cli`.
+
+### Architecture Requirements (Status)
+
+1. `RQ-CLI-ARCH-001` (P1): ✅ Done. Shared runtime orchestration helpers moved to `clarity/runtime-shared/runtime-shared.clarity` and consumed by both `runtime-chat` and `claritycli`.
+2. `RQ-CLI-ARCH-002` (P1): ✅ Done. Added bounded retention for long-running state in `connect`/`watch` seen markers and `serve` subscriber tracking.
+3. `RQ-CLI-ARCH-003` (P1): ✅ Done. Expanded CLI tests for runtime-chat stream->poll fallback, resume-latest behavior, terminal exit behavior, and claritycli alias/discuss paths.
+
+### UX Requirements (Status)
+
+1. `RQ-CLI-UX-001` (P1): ⚠ In progress. Default TTY behavior now prefers arrow-key selection with numeric fallback; full closure still depends on `RQ-LANG-CLI-TTY-003` runtime key-delivery reliability.
+2. `RQ-CLI-UX-002` (P1): ✅ Done. Token handling is standardized across runtime and broker commands (`--token` -> env var -> empty).
+3. `RQ-CLI-UX-003` (P2): ✅ Done. README/spec/architecture docs updated to Clarity-native command paths and current behavior.
+
+### Security Requirements (Status)
+
+1. `RQ-CLI-SEC-001` (P1): ✅ Done. Query-string token auth is now disabled by default and only enabled via explicit `--allow-query-token`.
+2. `RQ-CLI-SEC-002` (P1): ✅ Done. Removed default interactive token prompt path in runtime chat and standardized env-based token resolution to reduce shell/history leakage pressure.
+3. `RQ-CLI-SEC-003` (P2): ✅ Done. Documented minimum broker auth hardening profile (header bearer auth, explicit query-token opt-in, TLS/proxy guidance).
+
+### Documentation, License, and GitHub Setup Requirements (Status)
+
+1. `RQ-CLI-DOC-001` (P1): ✅ Done. Removed stale TypeScript/Express repository layout references in broker documentation.
+2. `RQ-CLI-LIC-001` (P1): ✅ Done. Added `LICENSE` file and package-level `license` metadata.
+3. `RQ-CLI-CI-001` (P1): ✅ Done. Switched `clarity-lang` dependency to HTTPS tarball source and removed SSH lockfile resolution.
+4. `RQ-CLI-CI-002` (P2): ✅ Done. Updated CODEOWNERS and labeler globs to current `clarity/**` and `tests/**` layout.

@@ -1,6 +1,6 @@
 module HitlServe
 
-import { positional, flag_or, flag_int_or } from "std/cli"
+import { positional, flag_or, flag_int_or, has_flag } from "std/cli"
 import { get, get_or, get_nested_or, escape } from "std/json"
 import { decode } from "std/url"
 
@@ -133,6 +133,45 @@ function bool_json(value: Bool) -> String {
   }
 }
 
+function list_contains_i64(values: List<Int64>, target: Int64) -> Bool {
+  match is_empty(values) {
+    True -> False,
+    False -> match head(values) == target {
+      True -> True,
+      False -> list_contains_i64(tail(values), target)
+    }
+  }
+}
+
+function list_len<T>(values: List<T>) -> Int64 {
+  match is_empty(values) {
+    True -> 0,
+    False -> 1 + list_len(tail(values))
+  }
+}
+
+function drop_first<T>(values: List<T>, n: Int64) -> List<T> {
+  match n <= 0 or is_empty(values) {
+    True -> values,
+    False -> drop_first(tail(values), n - 1)
+  }
+}
+
+function trim_to_last<T>(values: List<T>, limit: Int64) -> List<T> {
+  let size = list_len(values);
+  match size <= limit {
+    True -> values,
+    False -> drop_first(values, size - limit)
+  }
+}
+
+function append_subscriber_bounded(subscribers: List<Int64>, request_id: Int64) -> List<Int64> {
+  match list_contains_i64(subscribers, request_id) {
+    True -> subscribers,
+    False -> trim_to_last(append(subscribers, request_id), 256)
+  }
+}
+
 effect[Network] function respond_json(request_id: Int64, status: Int64, body_json: String) -> Unit {
   http_respond(request_id, status, "{\"Content-Type\":\"application/json\"}", body_json)
 }
@@ -182,14 +221,17 @@ function query_token(req_json: String) -> String {
   }
 }
 
-function is_authorized(req_json: String, token: String) -> Bool {
+function is_authorized(req_json: String, token: String, allow_query_token: Bool) -> Bool {
   let required = trim(token);
   match string_length(required) == 0 {
     True -> True,
     False -> {
       let expected = "Bearer " ++ required;
       let header_ok = request_auth_header(req_json) == expected;
-      let query_ok = trim(query_token(req_json)) == required;
+      let query_ok = match allow_query_token {
+        True -> trim(query_token(req_json)) == required,
+        False -> False
+      };
       header_ok or query_ok
     }
   }
@@ -546,6 +588,7 @@ effect[FileSystem, Network, Time] function handle_request(
   req_json: String,
   dir: String,
   token: String,
+  allow_query_token: Bool,
   state: ServeState
 ) -> ServeState {
   let request_id = parse_int_or(get_or(req_json, "id", "0"), 0);
@@ -554,7 +597,7 @@ effect[FileSystem, Network, Time] function handle_request(
 
   match request_id <= 0 {
     True -> state,
-    False -> match is_authorized(req_json, token) {
+    False -> match is_authorized(req_json, token, allow_query_token) {
       False -> {
         respond_json(
           request_id,
@@ -580,7 +623,7 @@ effect[FileSystem, Network, Time] function handle_request(
                 "{\"Cache-Control\":\"no-cache\",\"Connection\":\"keep-alive\"}"
               );
               send_initial_events_to_subscriber(list_dir(dir), dir, timestamp_to_int(now()), request_id);
-              { subscribers: append(state.subscribers, request_id) }
+              { subscribers: append_subscriber_bounded(state.subscribers, request_id) }
             },
             False -> match method == "POST" and path == "/questions" {
               True -> handle_post_question(request_id, req_json, dir, state),
@@ -618,16 +661,17 @@ effect[FileSystem, Network, Log, Time] function serve_loop(
   server_handle: Int64,
   dir: String,
   token: String,
+  allow_query_token: Bool,
   state: ServeState
 ) -> Unit {
   match http_next_request(server_handle) {
     Err(msg) -> {
       print_string("serve request error: " ++ msg);
-      serve_loop(server_handle, dir, token, state)
+      serve_loop(server_handle, dir, token, allow_query_token, state)
     },
     Ok(req_json) -> {
-      let next_state = handle_request(req_json, dir, token, state);
-      serve_loop(server_handle, dir, token, next_state)
+      let next_state = handle_request(req_json, dir, token, allow_query_token, state);
+      serve_loop(server_handle, dir, token, allow_query_token, next_state)
     }
   }
 }
@@ -652,6 +696,10 @@ function resolve_port(args: List<String>) -> Int64 {
   clamp(1, 65535, flag_int_or(args, "port", 7842))
 }
 
+function resolve_allow_query_token(args: List<String>) -> Bool {
+  has_flag(args, "allow-query-token")
+}
+
 effect[Secret] function resolve_token(args: List<String>) -> String {
   let flag_token = trim(flag_or(args, "token", ""));
   match string_length(flag_token) > 0 {
@@ -667,6 +715,7 @@ export effect[Network, FileSystem, Secret, Log, Time] function run_hitl_serve(ar
   let dir = resolve_dir(args);
   let port = resolve_port(args);
   let token = resolve_token(args);
+  let allow_query_token = resolve_allow_query_token(args);
 
   make_dir(dir);
 
@@ -682,7 +731,11 @@ export effect[Network, FileSystem, Secret, Log, Time] function run_hitl_serve(ar
         True -> print_string("Auth: bearer token required"),
         False -> print_string("Auth: disabled")
       };
-      serve_loop(server_handle, dir, token, { subscribers: [] })
+      match allow_query_token {
+        True -> print_string("Auth compatibility mode: query token enabled"),
+        False -> noop_serve()
+      };
+      serve_loop(server_handle, dir, token, allow_query_token, { subscribers: [] })
     }
   }
 }

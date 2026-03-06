@@ -10,25 +10,34 @@ docs:
 
 tests:
   - changed-files:
-      - any-glob-to-any-file: "src/tests/**"
+      - any-glob-to-any-file: "tests/**"
 
 cli-core:
   - changed-files:
       - any-glob-to-any-file:
-          - "src/cmd/**"
-          - "src/pkg/hitl/**"
-          - "src/pkg/tty/**"
+          - "clarity/main.clarity"
+          - "clarity/runtime-chat/**"
+          - "clarity/runtime-agents/**"
+          - "clarity/claritycli.clarity"
+          - "clarity/runtime-shared/**"
 
 hitl-protocol:
   - changed-files:
       - any-glob-to-any-file:
           - "docs/hitl-broker-spec.md"
-          - "src/pkg/http/**"
-          - "src/pkg/hitl/**"
+          - "clarity/connect/**"
+          - "clarity/watch/**"
+          - "clarity/list/**"
+          - "clarity/answer/**"
+          - "clarity/cancel/**"
+          - "clarity/serve/**"
 
-web-ui:
+packaging:
   - changed-files:
-      - any-glob-to-any-file: "src/pkg/ui/**"
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"
+          - "scripts/**"
 
 assets:
   - changed-files:

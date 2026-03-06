@@ -1,5 +1,7 @@
 * @erikaxelsson
 
 .github/workflows/* @erikaxelsson
-src/pkg/http/* @erikaxelsson
-src/pkg/hitl/* @erikaxelsson
+clarity/* @erikaxelsson
+clarity/**/* @erikaxelsson
+docs/* @erikaxelsson
+tests/* @erikaxelsson

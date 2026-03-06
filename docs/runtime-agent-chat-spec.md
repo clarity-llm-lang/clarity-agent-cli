@@ -15,7 +15,7 @@ Provide a native Clarity operator flow to:
 ## Commands
 
 - `clarity-agent runtime-agents [runtimeUrl] [--token <secret>]`
-- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]`
+- `clarity-agent runtime-chat [runtimeUrl] [serviceId] [--agent <agentId>] [--run-id <runId>] [--resume-latest] [--token <secret>] [--poll-ms <ms>] [--events-limit <n>] [--no-stream]`
 
 Single-start UX for `runtime-chat`:
 
@@ -33,6 +33,8 @@ Single-start UX for `runtime-chat`:
   - emits `agent.run_created` then `agent.run_started`
 - `POST /api/agents/runs/:runId/messages`
   - sends operator messages with `role = "user"`
+- `GET /api/agents/runs?limit=200`
+  - optional run resume lookup for `--resume-latest`
 - `GET /api/agents/runs/:runId/events/stream`
   - preferred run-scoped SSE stream
 - `GET /api/agents/runs/:runId/events`
@@ -63,6 +65,7 @@ Single-start UX for `runtime-chat`:
 ## Security
 
 - Optional bearer token is forwarded as `Authorization: Bearer <token>`.
+- Token resolution precedence for runtime commands: `--token` -> `CLARITY_RUNTIME_TOKEN` -> empty token.
 
 ## Implementation location
 
