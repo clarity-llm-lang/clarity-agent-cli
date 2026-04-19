@@ -28,6 +28,6 @@
     "clarity-lang": "https://codeload.github.com/clarity-llm-lang/clarity-compiler/tar.gz/main"
   },
   "devDependencies": {
-    "prettier": "^3.5.3"
+    "prettier": "^3.8.3"
   }
 }
